@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS buy_orders (
   id UUID PRIMARY KEY,
   status VARCHAR(32) NOT NULL,
   amount_brl NUMERIC(18,2) NOT NULL,
+  amount_fiat NUMERIC(18,2),
+  fiat_currency VARCHAR(8) NOT NULL DEFAULT 'BRL',
+  payment_method VARCHAR(32) NOT NULL DEFAULT 'pix',
+  provider_payment_id TEXT,
   fee_brl NUMERIC(18,2),
   payout_brl NUMERIC(18,2),
   crypto_amount NUMERIC(28,8) NOT NULL,
@@ -81,6 +85,12 @@ CREATE TABLE IF NOT EXISTS buy_orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS amount_fiat NUMERIC(18,2);
+ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS fiat_currency VARCHAR(8) NOT NULL DEFAULT 'BRL';
+ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(32) NOT NULL DEFAULT 'pix';
+ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS provider_payment_id TEXT;
+UPDATE buy_orders SET amount_fiat = amount_brl WHERE amount_fiat IS NULL;
 
 CREATE TABLE IF NOT EXISTS buy_order_events (
   id UUID PRIMARY KEY,
@@ -96,5 +106,6 @@ CREATE INDEX IF NOT EXISTS idx_orders_pix_cpf_created ON orders(pix_cpf, created
 CREATE INDEX IF NOT EXISTS idx_orders_pix_phone_created ON orders(pix_phone, created_at);
 CREATE INDEX IF NOT EXISTS idx_order_events_lookup ON order_events(order_id, type);
 CREATE INDEX IF NOT EXISTS idx_buy_orders_status ON buy_orders(status);
+CREATE INDEX IF NOT EXISTS idx_buy_orders_rail ON buy_orders(payment_method, fiat_currency, status);
 CREATE INDEX IF NOT EXISTS idx_buy_order_events_lookup ON buy_order_events(buy_order_id, type);
 CREATE INDEX IF NOT EXISTS idx_sweeps_status ON sweeps(status);
