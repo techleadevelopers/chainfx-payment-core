@@ -70,17 +70,41 @@ func (ow *OnchainWorker) pollTronEvents(ctx context.Context) {
 		slog.Warn("TRON_USDT_CONTRACT não configurado; pulando listener on-chain.")
 		return
 	}
+	if ow.cfg.TronFullNodeUrl == "" {
+		slog.Warn("TRON_FULLNODE_URL não configurado; pulando listener on-chain.")
+		return
+	}
 
 	start := time.Now()
 	slog.Debug("Iniciando varredura de blocos na TRON...")
 
-	// 1. Em produção, buscaríamos as ordens pendentes do Postgres.
-	// Simulando a obtenção das carteiras temporárias ativas no gateway.
-	mockPendingAddresses := map[string]string{
-		"TXYZ1234567890AddressDerivadoDoJoao": "uuid-da-ordem-do-joao",
+	pending, err := ow.db.GetPendingOrders(ctx)
+	if err != nil {
+		slog.Error("Erro ao buscar ordens pendentes", "error", err)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	ordersByAddress := make(map[string]struct {
+		ID        string
+		Expected  float64
+		PixCpf    string
+		PixPhone  string
+		ExpiresAt time.Time
+	}, len(pending))
+	for _, order := range pending {
+		if order.Network == "TRON" || order.Network == "" {
+			ordersByAddress[order.Address] = struct {
+				ID        string
+				Expected  float64
+				PixCpf    string
+				PixPhone  string
+				ExpiresAt time.Time
+			}{ID: order.ID, Expected: order.AmountUSDT, PixCpf: order.PixCpf, PixPhone: order.PixPhone, ExpiresAt: order.RateLockExpiresAt}
+		}
 	}
 
-	// 2. Monta a URL para buscar eventos do contrato inteligente de USDT
 	url := fmt.Sprintf("%s/v1/contracts/%s/events?event_name=Transfer&only_confirmed=true&limit=50",
 		strings.TrimSuffix(ow.cfg.TronFullNodeUrl, "/"),
 		ow.cfg.TronUsdtContract,
@@ -110,26 +134,48 @@ func (ow *OnchainWorker) pollTronEvents(ctx context.Context) {
 		// A API da TRON pode retornar endereços em formato Hexadecimal ou Base58 (Tratamos o mapeamento)
 		toAddress := ev.Result.To
 
-		orderID, exists := mockPendingAddresses[toAddress]
+		order, exists := ordersByAddress[toAddress]
 		if !exists {
+			continue
+		}
+		if !order.ExpiresAt.IsZero() && time.Now().After(order.ExpiresAt) {
+			_ = ow.db.UpdateOrderStatus(ctx, order.ID, "expirada", map[string]interface{}{"error": "Ordem expirada"})
 			continue
 		}
 
 		// Converte o valor retornado (Sun) para unidade USDT (6 decimais na rede TRON)
 		rawAmount, _ := strconv.ParseFloat(ev.Result.Value, 64)
-		amountUSDT := rawAmount / 1_000_000.0
+		amountUSDT := rawAmount / pow10(ow.cfg.TronUsdtDecimals)
+		tolerance := ow.cfg.TronDepositTolerancePct
+		if tolerance <= 0 {
+			tolerance = 0.02
+		}
+		min := order.Expected * (1 - tolerance)
+		max := order.Expected * (1 + tolerance)
+		if amountUSDT < min || amountUSDT > max {
+			_ = ow.db.UpdateOrderStatus(ctx, order.ID, "aguardando_validacao", map[string]interface{}{"error": "Depósito fora da faixa", "depositTx": ev.TransactionID, "depositAmount": amountUSDT})
+			continue
+		}
+		duplicate, _ := ow.db.HasEvent(ctx, order.ID, "order.pago", "depositTx", ev.TransactionID)
+		if duplicate {
+			continue
+		}
 
 		slog.Info("Depósito detectado na blockchain TRON",
-			"order_id", orderID,
+			"order_id", order.ID,
 			"address", toAddress,
 			"amount_usdt", amountUSDT,
 			"tx_hash", ev.TransactionID,
 		)
+		if err := ow.db.UpdateOrderStatus(ctx, order.ID, "pago", map[string]interface{}{"depositTx": ev.TransactionID, "depositAmount": amountUSDT}); err != nil {
+			slog.Error("Erro ao atualizar ordem paga", "order_id", order.ID, "error", err)
+			continue
+		}
 
 		// 4. Dispara o evento de sucesso de pagamento
 		ow.bus.Publish(Event{
 			Type:    "onchain.detected",
-			OrderID: orderID,
+			OrderID: order.ID,
 			Payload: map[string]interface{}{
 				"tx_hash":     ev.TransactionID,
 				"amount_usdt": amountUSDT,
@@ -137,11 +183,28 @@ func (ow *OnchainWorker) pollTronEvents(ctx context.Context) {
 		})
 
 		// 5. Encaminha automaticamente para a esteira de Payout PIX
-		ow.bus.Publish(Event{
-			Type:    "payout.requested",
-			OrderID: orderID,
-		})
+		completed, _ := ow.db.CountCompletedOrdersForPix(ctx, order.PixCpf, order.PixPhone)
+		if completed == 0 && ow.cfg.OrderHoldSecForNewDest > 0 {
+			orderID := order.ID
+			delay := time.Duration(ow.cfg.OrderHoldSecForNewDest) * time.Second
+			time.AfterFunc(delay, func() {
+				ow.bus.Publish(Event{Type: "payout.requested", OrderID: orderID})
+			})
+		} else {
+			ow.bus.Publish(Event{Type: "payout.requested", OrderID: order.ID})
+		}
 	}
 
 	slog.Info("Ciclo de polling TRON finalizado", "duration_ms", time.Since(start).Milliseconds())
+}
+
+func pow10(decimals int) float64 {
+	if decimals <= 0 {
+		return 1
+	}
+	out := 1.0
+	for i := 0; i < decimals; i++ {
+		out *= 10
+	}
+	return out
 }
