@@ -5,8 +5,9 @@ import (
 	"log"
 	"time"
 
+	"payment-gateway/internal/config"
+
 	"github.com/jackc/pgx/v5/pgxpool"
-	"meu-gateway-go/internal/config"
 )
 
 // DB guarda a referência para o pool de conexões do Postgres
@@ -35,7 +36,7 @@ func ConnectPostgres(cfg *config.Config) (*DB, error) {
 	}
 
 	log.Println("Conexão com PostgreSQL estabelecida com sucesso!")
-	
+
 	return &DB{Pool: pool}, nil
 }
 
