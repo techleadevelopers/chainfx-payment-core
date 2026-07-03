@@ -29,7 +29,8 @@ func main() {
 	defer cancel()
 
 	// 2. Inicializa o gerenciador e dispara os Workers de Produção
-	workerMgr := workers.NewWorkerManager(db)
+	// Altere apenas a linha de inicialização no cmd/api/main.go:
+    workerMgr := workers.NewWorkerManager(db, cfg)
 	workerMgr.StartAll(ctx)
 
 	log.Println("Todos os motores em background foram disparados e isolados.")
