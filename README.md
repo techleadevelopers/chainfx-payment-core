@@ -1,3 +1,72 @@
+# Financial Product Interface
+
+<div align="center">
+  <img src="https://res.cloudinary.com/limpeja/image/upload/v1783058055/bf895cd7-96a7-4264-8cae-aa51a6d24e58.png" alt="Swappy Logo" width="1024" />
+</div>
+
+---
+
+## 📱 Swappy - Buy & Sell Crypto Instantly
+
+**Swappy** é uma plataforma Web3 que permite comprar e vender stablecoins como USDT(Tether.io) e EURUSD Nova moeda europeia de forma instantânea e segura. Com integração via PIX, você pode realizar transações em segundos com total confiabilidade.
+
+### ✨ Diferenciais da Plataforma
+
+- ⚡ **Compre e venda cripto instantaneamente** via PIX
+- 🔒 **Transações seguras** e sem complicações
+- 👥 **950.000+ usuários** confiam na Swappy
+- 💳 **30+ opções** de pagamento locais
+- 🪙 **100+ criptomoedas** disponíveis
+
+---
+
+## 🛒 Fluxo de Compra (Buy) - Step 1
+
+### Informe o valor e visualize a cotação
+
+<div align="center">
+  <img src="https://res.cloudinary.com/limpeja/image/upload/v1783058374/compra-removebg-preview_ikab4t.png" alt="Swappy - Tela de Compra" width="600" />
+</div>
+
+**Como funciona:**
+
+1. Selecione a moeda que deseja pagar (BRL)
+2. Informe o valor que deseja comprar
+3. Visualize a cotação atualizada em tempo real
+4. Confirme a quantidade de cripto que irá receber
+
+---
+
+## 💳 Fluxo de Pagamento - Step 2
+
+### Insira sua wallet e escolha o método de pagamento
+
+<div align="center">
+  <img src="https://res.cloudinary.com/limpeja/image/upload/v1783058436/sp2-removebg-preview_iarh45.png" alt="Swappy - Tela de Pagamento" width="600" />
+</div>
+
+**Como funciona:**
+
+1. **Informe sua Wallet** - Cole o endereço da sua carteira (ETH, BTC, USDT)
+2. **Escolha o método de pagamento**:
+   - 💰 **PIX** - Instantâneo e sem taxas extras
+   - 💳 **VISA** - Cartão de crédito internacional
+   - 💳 **Mastercard** - Cartão de crédito internacional
+3. **Confirme a transação** e receba suas criptos em segundos
+
+---
+
+## 🔄 Fluxo de Venda (Sell)
+
+### Venda suas criptos e receba em reais
+
+1. Selecione a criptomoeda que deseja vender
+2. Informe a quantidade
+3. Escolha o método de recebimento (PIX)
+4. Confirme a transação e receba em sua conta
+
+---
+
 # Swappy Payment Gateway
 
 Backend Go para orquestracao instantanea de settlement fiat -> USDT.
