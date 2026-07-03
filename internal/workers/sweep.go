@@ -61,20 +61,60 @@ func (sw *SweepWorker) Start(ctx context.Context) {
 }
 
 func (sw *SweepWorker) executeSweeps(ctx context.Context) {
+	if sw.cfg.EnableSweepStub {
+		pending, err := sw.db.ListPendingSweeps(ctx)
+		if err != nil {
+			slog.Error("Erro ao listar sweeps pendentes", "error", err)
+			return
+		}
+		for _, sweep := range pending {
+			txHash := "sweep-sim-" + sweep.ID
+			_ = sw.db.MarkSweep(ctx, sweep.ID, "sent", txHash)
+			slog.Info("Sweep simulado concluído", "sweep_id", sweep.ID, "tx_hash", txHash)
+		}
+		return
+	}
 	if sw.cfg.SignerUrl == "" || sw.cfg.TreasuryHot == "" {
 		slog.Warn("SweepWorker suspenso: SIGNER_URL ou TREASURY_HOT ausentes.")
 		return
 	}
 
-	// Exemplo de payload a ser assinado para varrer uma carteira filha índice #42
-	payload := SweepPayload{
-		DerivationIndex: 42,
-		To:              sw.cfg.TreasuryHot,
-		Amount:          "150.50", // 150.50 USDT
-		TokenContract:   sw.cfg.TronUsdtContract,
-		IdempotencyKey:  "sweep-uuid-da-transacao",
+	orders, err := sw.db.OrdersToSweep(ctx)
+	if err != nil {
+		slog.Error("Erro ao buscar ordens para sweep", "error", err)
+		return
 	}
+	for _, order := range orders {
+		if order.DerivationIndex == nil {
+			continue
+		}
+		amount := order.AmountUSDT
+		if order.DepositAmount != nil {
+			amount = *order.DepositAmount
+		}
+		orderID := order.ID
+		if _, err := sw.db.CreateSweep(ctx, *order.DerivationIndex, order.Address, sw.cfg.TreasuryHot, amount, &orderID); err != nil {
+			slog.Error("Erro ao criar sweep", "order_id", order.ID, "error", err)
+		}
+	}
+	pending, err := sw.db.ListPendingSweeps(ctx)
+	if err != nil {
+		slog.Error("Erro ao listar sweeps pendentes", "error", err)
+		return
+	}
+	for _, sweep := range pending {
+		sw.sendSweep(ctx, sweep)
+	}
+}
 
+func (sw *SweepWorker) sendSweep(ctx context.Context, sweep database.Sweep) {
+	payload := SweepPayload{
+		DerivationIndex: sweep.ChildIndex,
+		To:              sweep.ToAddr,
+		Amount:          fmt.Sprintf("%.8f", sweep.Amount),
+		TokenContract:   sw.cfg.TronUsdtContract,
+		IdempotencyKey:  sweep.ID,
+	}
 	bodyBytes, _ := json.Marshal(payload)
 
 	// --- CÁLCULO CRIPTOGRÁFICO DO HMAC ANTI-REPLAY ---
@@ -105,18 +145,21 @@ func (sw *SweepWorker) executeSweeps(ctx context.Context) {
 	req.Header.Set("x-nonce", nonce)
 	req.Header.Set("x-signer-hmac", computedHmac)
 
-	slog.Info("Disparando comando de Sweep seguro para o Signer", "index", payload.DerivationIndex)
+	slog.Info("Disparando comando de Sweep seguro para o Signer", "index", payload.DerivationIndex, "sweep_id", sweep.ID)
 
 	resp, err := sw.client.Do(req)
 	if err != nil {
 		slog.Error("Falha crítica na comunicação com o Signer HD", "error", err)
+		_ = sw.db.MarkSweep(ctx, sweep.ID, "failed", "")
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+		_ = sw.db.MarkSweep(ctx, sweep.ID, "sent", "signer-accepted-"+sweep.ID)
 		slog.Info("Varredura (Sweep) executada e assinada com sucesso na blockchain.")
 	} else {
+		_ = sw.db.MarkSweep(ctx, sweep.ID, "failed", "")
 		slog.Error("O serviço Signer rejeitou a transação de Sweep", "status", resp.StatusCode)
 	}
 }
