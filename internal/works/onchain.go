@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"meu-gateway-go/internal/config"
-	"meu-gateway-go/internal/database"
+	"payment-gateway/internal/config"
+	"payment-gateway/internal/database"
 )
 
 type OnchainWorker struct {
@@ -108,8 +108,8 @@ func (ow *OnchainWorker) pollTronEvents(ctx context.Context) {
 	// 3. Processa cada transferência encontrada no bloco
 	for _, ev := range result.Data {
 		// A API da TRON pode retornar endereços em formato Hexadecimal ou Base58 (Tratamos o mapeamento)
-		toAddress := ev.Result.To 
-		
+		toAddress := ev.Result.To
+
 		orderID, exists := mockPendingAddresses[toAddress]
 		if !exists {
 			continue
@@ -119,9 +119,9 @@ func (ow *OnchainWorker) pollTronEvents(ctx context.Context) {
 		rawAmount, _ := strconv.ParseFloat(ev.Result.Value, 64)
 		amountUSDT := rawAmount / 1_000_000.0
 
-		slog.Info("Depósito detectado na blockchain TRON", 
-			"order_id", orderID, 
-			"address", toAddress, 
+		slog.Info("Depósito detectado na blockchain TRON",
+			"order_id", orderID,
+			"address", toAddress,
 			"amount_usdt", amountUSDT,
 			"tx_hash", ev.TransactionID,
 		)
