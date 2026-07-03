@@ -49,7 +49,7 @@
 
 1. **Informe sua Wallet** - Cole o endereço da sua carteira (ETH, BTC, USDT)
 2. **Escolha o método de pagamento**:
-   - 💰 **PIX** - Instantâneo e sem taxas extras
+   - 💰 **PIX** - Instantaneo com taxa de transacao 2% + US$2
    - 💳 **VISA** - Cartão de crédito internacional
    - 💳 **Mastercard** - Cartão de crédito internacional
 3. **Confirme a transação** e receba suas criptos em segundos
@@ -257,7 +257,8 @@ SIGNER_HMAC_SECRET=...
 TRON_XPUB=...
 TRON_USDT_CONTRACT=...
 TRON_FULLNODE_URL=...
-FEE_BPS=0
+FEE_BPS=200
+FEE_FIXED_USD=2
 FEE_MIN_BRL=0
 ```
 
@@ -276,3 +277,5 @@ go run ./cmd/api
 ## Nota Operacional
 
 O caminho rapido da UX fica no quote e na criacao da intencao de compra. Confirmacao fiat e delivery cripto rodam em workers para manter baixa latencia no frontend e preservar consistencia financeira no backend.
+
+
