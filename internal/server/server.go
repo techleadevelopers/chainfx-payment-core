@@ -22,6 +22,7 @@ import (
 	"payment-gateway/internal/email"
 	"payment-gateway/internal/models"
 	"payment-gateway/internal/privacy"
+	"payment-gateway/internal/settlement"
 	"payment-gateway/internal/tron"
 	"payment-gateway/internal/workers"
 )
@@ -618,10 +619,9 @@ func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	status := "erro"
+	status := settlement.PixWebhookStatus(req.Status)
 	extra := map[string]any{"requestId": requestID(r), "error": req.Error}
-	if strings.HasPrefix(strings.ToLower(req.Status), "conclu") {
-		status = "pago_fiat"
+	if settlement.ShouldPublishBuyPaid(status) {
 		extra = map[string]any{"requestId": requestID(r), "providerPaymentId": req.ProviderID}
 	}
 	if err := s.db.UpdateBuyOrderStatus(r.Context(), req.BuyID, status, extra); err != nil {
@@ -629,7 +629,7 @@ func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.db.AddBuyEvent(r.Context(), req.BuyID, "webhook.provider", map[string]any{"requestId": requestID(r), "providerId": req.ProviderID, "status": req.Status})
-	if status == "pago_fiat" {
+	if settlement.ShouldPublishBuyPaid(status) {
 		s.workers.Bus.Publish(workers.Event{Type: "buy.paid", OrderID: req.BuyID, Payload: map[string]any{"providerId": req.ProviderID}})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -670,11 +670,9 @@ func (s *Server) handleStripeWebhookBuy(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "duplicate": true})
 		return
 	}
-	status := "erro"
+	status := settlement.StripeWebhookStatus(event.Type)
 	extra := map[string]any{"requestId": requestID(r), "providerPaymentId": event.ID, "stripeEventType": event.Type}
-	if event.Type == "checkout.session.completed" || event.Type == "payment_intent.succeeded" || event.Type == "charge.succeeded" {
-		status = "pago_fiat"
-	} else {
+	if !settlement.ShouldPublishBuyPaid(status) {
 		extra["error"] = "stripe event nao liquidado: " + event.Type
 	}
 	if err := s.db.UpdateBuyOrderStatus(r.Context(), buyID, status, extra); err != nil {
@@ -682,7 +680,7 @@ func (s *Server) handleStripeWebhookBuy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	_ = s.db.AddBuyEvent(r.Context(), buyID, "webhook.provider", map[string]any{"requestId": requestID(r), "providerId": event.ID, "status": event.Type})
-	if status == "pago_fiat" {
+	if settlement.ShouldPublishBuyPaid(status) {
 		s.workers.Bus.Publish(workers.Event{Type: "buy.paid", OrderID: buyID, Payload: map[string]any{"providerId": event.ID, "rail": "stripe"}})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
