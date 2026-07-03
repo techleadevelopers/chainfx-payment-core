@@ -22,6 +22,7 @@ type Config struct {
 	OrderRateLimitWindowMs int
 	OrderRateLimitMax      int
 	FeeBps                 int
+	FeeFixedUsd            float64
 	FeeMinBrl              float64
 	BuyHotDerivationIndex  int
 
@@ -90,7 +91,8 @@ func LoadConfig() *Config {
 		RateLimitMax:           getEnvAsInt("RATE_LIMIT_MAX", 100),
 		OrderRateLimitWindowMs: getEnvAsInt("ORDER_RATE_LIMIT_WINDOW_MS", 60000),
 		OrderRateLimitMax:      getEnvAsInt("ORDER_RATE_LIMIT_MAX", 20),
-		FeeBps:                 getEnvAsInt("FEE_BPS", 0),
+		FeeBps:                 getEnvAsInt("FEE_BPS", getEnvAsInt("TRANSACTION_FEE_BPS", 200)),
+		FeeFixedUsd:            getEnvAsFloat("FEE_FIXED_USD", getEnvAsFloat("TRANSACTION_FEE_FIXED_USD", 2.0)),
 		FeeMinBrl:              getEnvAsFloat("FEE_MIN_BRL", 0),
 		BuyHotDerivationIndex:  getEnvAsInt("BUY_HOT_DERIVATION_INDEX", 0),
 
