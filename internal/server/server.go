@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,8 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/price", s.handlePrice)
+	mux.HandleFunc("GET /api/quote", s.handleQuote)
+	mux.HandleFunc("POST /api/quote", s.handleQuote)
 	mux.HandleFunc("POST /api/buy", s.handleCreateBuy)
 	mux.HandleFunc("GET /api/buy/{id}", s.handleGetBuy)
 	mux.HandleFunc("GET /api/buy/{id}/stream", s.handleBuyStream)
@@ -72,15 +75,9 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		AmountBRL float64 `json:"amountBRL"`
 		Asset     string  `json:"asset"`
 		Address   string  `json:"address"`
-		PixCpf    string  `json:"pixCpf"`
-		PixPhone  string  `json:"pixPhone"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invÃ¡lido"})
-		return
-	}
-	if req.PixCpf == "" && req.PixPhone == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pixCpf ou pixPhone Ã© obrigatÃ³rio"})
 		return
 	}
 	asset := strings.ToUpper(defaultString(req.Asset, "USDT"))
@@ -92,13 +89,18 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereÃ§o TRON invÃ¡lido"})
 		return
 	}
+	if req.PixCpf == "" && req.PixPhone == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pixCpf ou pixPhone e obrigatorio"})
+		return
+	}
 	if req.AmountBRL < s.cfg.OrderMinBrl || req.AmountBRL > s.cfg.OrderMaxBrl {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
 		return
 	}
 	rate := s.workers.PriceWorker.GetCurrentPrice()
 	if rate <= 0 {
-		rate = 5.0
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
+		return
 	}
 	fee := math.Max(s.cfg.FeeMinBrl, req.AmountBRL*(float64(s.cfg.FeeBps)/10000))
 	payout := req.AmountBRL - fee
@@ -124,7 +126,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent(), "pixCpf": req.PixCpf, "pixPhone": req.PixPhone})
+	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent()})
 	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"amountBRL": req.AmountBRL}})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "feeBRL": fee, "payoutBRL": payout,
@@ -184,6 +186,69 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"brl": price})
 }
 
+func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
+	var amountBRL float64
+	mode := "buy"
+	asset := "USDT"
+	if r.Method == http.MethodGet {
+		amountBRL, _ = strconv.ParseFloat(r.URL.Query().Get("amountBRL"), 64)
+		mode = defaultString(r.URL.Query().Get("mode"), mode)
+		asset = defaultString(r.URL.Query().Get("asset"), asset)
+	} else {
+		var req struct {
+			AmountBRL float64 `json:"amountBRL"`
+			Mode      string  `json:"mode"`
+			Asset     string  `json:"asset"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invalido"})
+			return
+		}
+		amountBRL = req.AmountBRL
+		mode = defaultString(req.Mode, mode)
+		asset = defaultString(req.Asset, asset)
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	if mode != "buy" && mode != "sell" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "modo invalido"})
+		return
+	}
+	if asset != "USDT" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
+		return
+	}
+	if amountBRL <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amountBRL deve ser maior que zero"})
+		return
+	}
+	if amountBRL < s.cfg.OrderMinBrl || amountBRL > s.cfg.OrderMaxBrl {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
+		return
+	}
+	rate := s.workers.PriceWorker.GetCurrentPrice()
+	if rate <= 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
+		return
+	}
+	fee := math.Max(s.cfg.FeeMinBrl, amountBRL*(float64(s.cfg.FeeBps)/10000))
+	payout := amountBRL - fee
+	if payout <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apos taxa"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mode":              mode,
+		"asset":             asset,
+		"amountBRL":         amountBRL,
+		"feeBRL":            fee,
+		"payoutBRL":         payout,
+		"rate":              rate,
+		"cryptoAmount":      payout / rate,
+		"rateLockExpiresAt": time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
+	})
+}
+
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	if !s.limiter.Allow(clientIP(r)) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite de criação de ordens excedido"})
@@ -199,10 +264,6 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON inválido"})
-		return
-	}
-	if req.PixCpf == "" && req.PixPhone == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pixCpf ou pixPhone é obrigatório"})
 		return
 	}
 	if req.AmountBRL < s.cfg.OrderMinBrl || req.AmountBRL > s.cfg.OrderMaxBrl {
@@ -276,7 +337,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent(), "pixCpf": req.PixCpf, "pixPhone": req.PixPhone})
+	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent()})
 	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"amountBRL": req.AmountBRL}})
 	s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. Endereço: %s", order.ID, req.AmountBRL, depositAddress))
 	writeJSON(w, http.StatusCreated, map[string]any{
