@@ -59,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/order/{id}/payout", s.handlePayout)
 	mux.HandleFunc("POST /api/pix/webhook", s.handlePixWebhook)
 	mux.HandleFunc("POST /api/pix/webhook/buy", s.handlePixWebhookBuy)
+	mux.HandleFunc("POST /api/stripe/webhook/buy", s.handlePixWebhookBuy)
 	mux.HandleFunc("POST /internal/sweep", s.handleInternalSweep)
 	mux.HandleFunc("POST /internal/email/test", s.handleEmailTest)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]any{"ok": true}) })
@@ -72,9 +73,14 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		AmountBRL float64 `json:"amountBRL"`
-		Asset     string  `json:"asset"`
-		Address   string  `json:"address"`
+		AmountBRL         float64 `json:"amountBRL"`
+		AmountUSD         float64 `json:"amountUSD"`
+		AmountFiat        float64 `json:"amountFiat"`
+		FiatCurrency      string  `json:"fiatCurrency"`
+		PaymentMethod     string  `json:"paymentMethod"`
+		ProviderPaymentID string  `json:"providerPaymentId"`
+		Asset             string  `json:"asset"`
+		Address           string  `json:"address"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invÃ¡lido"})
@@ -89,30 +95,47 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereÃ§o TRON invÃ¡lido"})
 		return
 	}
-	if req.PixCpf == "" && req.PixPhone == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pixCpf ou pixPhone e obrigatorio"})
+	fiatCurrency, paymentMethod, amountFiat := normalizeBuyRail(req.FiatCurrency, req.PaymentMethod, req.AmountFiat, req.AmountBRL, req.AmountUSD)
+	if fiatCurrency == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fiatCurrency invalida"})
 		return
 	}
-	if req.AmountBRL < s.cfg.OrderMinBrl || req.AmountBRL > s.cfg.OrderMaxBrl {
+	if amountFiat <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amountFiat deve ser maior que zero"})
+		return
+	}
+	if fiatCurrency == "BRL" && (amountFiat < s.cfg.OrderMinBrl || amountFiat > s.cfg.OrderMaxBrl) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
 		return
 	}
-	rate := s.workers.PriceWorker.GetCurrentPrice()
+	rate := s.workers.PriceWorker.GetPrice(fiatCurrency)
 	if rate <= 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
 		return
 	}
-	fee := math.Max(s.cfg.FeeMinBrl, req.AmountBRL*(float64(s.cfg.FeeBps)/10000))
-	payout := req.AmountBRL - fee
+	fee := amountFiat * (float64(s.cfg.FeeBps) / 10000)
+	if fiatCurrency == "BRL" {
+		fee = math.Max(s.cfg.FeeMinBrl, fee)
+	}
+	payout := amountFiat - fee
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apÃ³s taxa"})
 		return
 	}
 	cryptoAmount := payout / rate
-	pixPayload := map[string]any{"pixKey": "chavepix@nexswap.com", "qrCodeUrl": "/images/qrcode.png"}
+	paymentPayload := buildPaymentPayload(paymentMethod)
+	amountBRL := 0.0
+	if fiatCurrency == "BRL" {
+		amountBRL = amountFiat
+	}
+	status := "aguardando_" + paymentMethod
 	buy, err := s.db.CreateBuyOrder(r.Context(), database.BuyOrderInput{
-		Status:            "aguardando_pix",
-		AmountBRL:         req.AmountBRL,
+		Status:            status,
+		AmountBRL:         amountBRL,
+		AmountFiat:        amountFiat,
+		FiatCurrency:      fiatCurrency,
+		PaymentMethod:     paymentMethod,
+		ProviderPaymentID: req.ProviderPaymentID,
 		FeeBRL:            fee,
 		PayoutBRL:         payout,
 		CryptoAmount:      cryptoAmount,
@@ -120,18 +143,18 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		DestAddress:       strings.TrimSpace(req.Address),
 		RateLocked:        rate,
 		RateLockExpiresAt: time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
-		PixPayload:        pixPayload,
+		PixPayload:        paymentPayload,
 	})
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent()})
-	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"amountBRL": req.AmountBRL}})
+	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "feeBRL": fee, "payoutBRL": payout,
+		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "payoutFiat": payout,
 		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "destAddress": buy.DestAddress,
-		"pixKey": pixPayload["pixKey"], "qrCodeUrl": pixPayload["qrCodeUrl"],
+		"payment": paymentPayload,
 	})
 }
 
@@ -187,26 +210,40 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
-	var amountBRL float64
+	var amountBRL, amountUSD, amountFiat float64
 	mode := "buy"
 	asset := "USDT"
+	fiatCurrency := "BRL"
+	paymentMethod := "pix"
 	if r.Method == http.MethodGet {
 		amountBRL, _ = strconv.ParseFloat(r.URL.Query().Get("amountBRL"), 64)
+		amountUSD, _ = strconv.ParseFloat(r.URL.Query().Get("amountUSD"), 64)
+		amountFiat, _ = strconv.ParseFloat(r.URL.Query().Get("amountFiat"), 64)
 		mode = defaultString(r.URL.Query().Get("mode"), mode)
 		asset = defaultString(r.URL.Query().Get("asset"), asset)
+		fiatCurrency = defaultString(r.URL.Query().Get("fiatCurrency"), fiatCurrency)
+		paymentMethod = defaultString(r.URL.Query().Get("paymentMethod"), paymentMethod)
 	} else {
 		var req struct {
-			AmountBRL float64 `json:"amountBRL"`
-			Mode      string  `json:"mode"`
-			Asset     string  `json:"asset"`
+			AmountBRL     float64 `json:"amountBRL"`
+			AmountUSD     float64 `json:"amountUSD"`
+			AmountFiat    float64 `json:"amountFiat"`
+			FiatCurrency  string  `json:"fiatCurrency"`
+			PaymentMethod string  `json:"paymentMethod"`
+			Mode          string  `json:"mode"`
+			Asset         string  `json:"asset"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invalido"})
 			return
 		}
 		amountBRL = req.AmountBRL
+		amountUSD = req.AmountUSD
+		amountFiat = req.AmountFiat
 		mode = defaultString(req.Mode, mode)
 		asset = defaultString(req.Asset, asset)
+		fiatCurrency = defaultString(req.FiatCurrency, fiatCurrency)
+		paymentMethod = defaultString(req.PaymentMethod, paymentMethod)
 	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	asset = strings.ToUpper(strings.TrimSpace(asset))
@@ -218,21 +255,29 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
-	if amountBRL <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amountBRL deve ser maior que zero"})
+	fiatCurrency, paymentMethod, amountFiat = normalizeBuyRail(fiatCurrency, paymentMethod, amountFiat, amountBRL, amountUSD)
+	if fiatCurrency == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "rail de pagamento invalido"})
 		return
 	}
-	if amountBRL < s.cfg.OrderMinBrl || amountBRL > s.cfg.OrderMaxBrl {
+	if amountFiat <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amountFiat deve ser maior que zero"})
+		return
+	}
+	if fiatCurrency == "BRL" && (amountFiat < s.cfg.OrderMinBrl || amountFiat > s.cfg.OrderMaxBrl) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
 		return
 	}
-	rate := s.workers.PriceWorker.GetCurrentPrice()
+	rate := s.workers.PriceWorker.GetPrice(fiatCurrency)
 	if rate <= 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
 		return
 	}
-	fee := math.Max(s.cfg.FeeMinBrl, amountBRL*(float64(s.cfg.FeeBps)/10000))
-	payout := amountBRL - fee
+	fee := amountFiat * (float64(s.cfg.FeeBps) / 10000)
+	if fiatCurrency == "BRL" {
+		fee = math.Max(s.cfg.FeeMinBrl, fee)
+	}
+	payout := amountFiat - fee
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apos taxa"})
 		return
@@ -240,9 +285,11 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":              mode,
 		"asset":             asset,
-		"amountBRL":         amountBRL,
-		"feeBRL":            fee,
-		"payoutBRL":         payout,
+		"amountFiat":        amountFiat,
+		"fiatCurrency":      fiatCurrency,
+		"paymentMethod":     paymentMethod,
+		"feeFiat":           fee,
+		"payoutFiat":        payout,
 		"rate":              rate,
 		"cryptoAmount":      payout / rate,
 		"rateLockExpiresAt": time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
@@ -264,6 +311,10 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON inválido"})
+		return
+	}
+	if req.PixCpf == "" && req.PixPhone == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pixCpf ou pixPhone e obrigatorio"})
 		return
 	}
 	if req.AmountBRL < s.cfg.OrderMinBrl || req.AmountBRL > s.cfg.OrderMaxBrl {
@@ -493,7 +544,11 @@ func (s *Server) handlePixWebhook(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	secret := defaultString(s.cfg.PixWebhookSecret, s.cfg.WebhookSecret)
-	if !validHMAC(secret, raw, r.Header.Get("x-pagbank-signature")) {
+	signature := r.Header.Get("x-pagbank-signature")
+	if signature == "" {
+		signature = r.Header.Get("x-stripe-signature")
+	}
+	if !validHMAC(secret, raw, signature) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invÃ¡lida"})
 		return
 	}
@@ -521,15 +576,15 @@ func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 	status := "erro"
 	extra := map[string]any{"error": req.Error}
 	if strings.HasPrefix(strings.ToLower(req.Status), "conclu") {
-		status = "pago_pix"
-		extra = map[string]any{"txHashOut": req.ProviderID}
+		status = "pago_fiat"
+		extra = map[string]any{"providerPaymentId": req.ProviderID}
 	}
 	if err := s.db.UpdateBuyOrderStatus(r.Context(), req.BuyID, status, extra); err != nil {
 		writeError(w, err)
 		return
 	}
 	_ = s.db.AddBuyEvent(r.Context(), req.BuyID, "webhook.provider", map[string]any{"providerId": req.ProviderID, "status": req.Status})
-	if status == "pago_pix" {
+	if status == "pago_fiat" {
 		s.workers.Bus.Publish(workers.Event{Type: "buy.paid", OrderID: req.BuyID, Payload: map[string]any{"providerId": req.ProviderID}})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -665,6 +720,47 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func normalizeBuyRail(currency, method string, amountFiat, amountBRL, amountUSD float64) (string, string, float64) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	method = strings.ToLower(strings.TrimSpace(method))
+	if currency == "" {
+		switch {
+		case amountUSD > 0:
+			currency = "USD"
+		default:
+			currency = "BRL"
+		}
+	}
+	if method == "" {
+		if currency == "USD" {
+			method = "stripe"
+		} else {
+			method = "pix"
+		}
+	}
+	if amountFiat <= 0 {
+		if currency == "USD" {
+			amountFiat = amountUSD
+		} else {
+			amountFiat = amountBRL
+		}
+	}
+	if (currency == "BRL" && method != "pix") || (currency == "USD" && method != "stripe") {
+		return "", "", 0
+	}
+	if currency != "BRL" && currency != "USD" {
+		return "", "", 0
+	}
+	return currency, method, amountFiat
+}
+
+func buildPaymentPayload(method string) map[string]any {
+	if method == "stripe" {
+		return map[string]any{"provider": "stripe", "status": "requires_payment", "checkoutUrl": ""}
+	}
+	return map[string]any{"provider": "pix", "pixKey": "chavepix@nexswap.com", "qrCodeUrl": "/images/qrcode.png"}
 }
 
 func clientIP(r *http.Request) string {
