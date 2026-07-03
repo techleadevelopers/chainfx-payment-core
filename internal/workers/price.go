@@ -41,7 +41,7 @@ func (pw *PriceWorker) GetCurrentPrice() float64 {
 // Start inicia o loop em background usando contextos para desligamento limpo (graceful shutdown)
 func (pw *PriceWorker) Start(ctx context.Context) {
 	slog.Info("PriceWorker inicializado com sucesso.")
-	
+
 	// Executa a primeira carga imediatamente no boot
 	pw.fetchPrice()
 
@@ -62,7 +62,7 @@ func (pw *PriceWorker) Start(ctx context.Context) {
 
 func (pw *PriceWorker) fetchPrice() {
 	start := time.Now()
-	
+
 	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=brl", nil)
 	if err != nil {
 		slog.Error("Erro ao criar requisição de preço", "error", err)
@@ -92,14 +92,14 @@ func (pw *PriceWorker) fetchPrice() {
 	pw.mu.Unlock()
 
 	// Métrica de latência básica integrada nos logs estruturados
-	slog.Info("Preço USDT atualizado com sucesso", 
-		"price", data.Tether.Brl, 
+	slog.Info("Preço USDT atualizado com sucesso",
+		"price", data.Tether.Brl,
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 
 	// Publica no barramento para quem quiser escutar
 	pw.bus.Publish(Event{
-		Type: "price.updated",
+		Type:    "price.updated",
 		Payload: map[string]interface{}{"price": data.Tether.Brl},
 	})
 }
