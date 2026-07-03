@@ -20,6 +20,7 @@ import (
 	"payment-gateway/internal/database"
 	"payment-gateway/internal/email"
 	"payment-gateway/internal/models"
+	"payment-gateway/internal/privacy"
 	"payment-gateway/internal/tron"
 	"payment-gateway/internal/workers"
 )
@@ -61,7 +62,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/order/{id}/payout", s.handlePayout)
 	mux.HandleFunc("POST /api/pix/webhook", s.handlePixWebhook)
 	mux.HandleFunc("POST /api/pix/webhook/buy", s.handlePixWebhookBuy)
-	mux.HandleFunc("POST /api/stripe/webhook/buy", s.handlePixWebhookBuy)
 	mux.HandleFunc("POST /internal/sweep", s.handleInternalSweep)
 	mux.HandleFunc("POST /internal/email/test", s.handleEmailTest)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]any{"ok": true}) })
@@ -76,13 +76,18 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		AmountBRL         float64 `json:"amountBRL"`
-		AmountUSD         float64 `json:"amountUSD"`
 		AmountFiat        float64 `json:"amountFiat"`
 		FiatCurrency      string  `json:"fiatCurrency"`
 		PaymentMethod     string  `json:"paymentMethod"`
 		ProviderPaymentID string  `json:"providerPaymentId"`
 		Asset             string  `json:"asset"`
 		Address           string  `json:"address"`
+		PixCpf            string  `json:"pixCpf"`
+		PixPhone          string  `json:"pixPhone"`
+		CPF               string  `json:"cpf"`
+		Phone             string  `json:"phone"`
+		Email             string  `json:"email"`
+		CustomerEmail     string  `json:"customerEmail"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invÃ¡lido"})
@@ -97,9 +102,9 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereÃ§o TRON invÃ¡lido"})
 		return
 	}
-	fiatCurrency, paymentMethod, amountFiat := normalizeBuyRail(req.FiatCurrency, req.PaymentMethod, req.AmountFiat, req.AmountBRL, req.AmountUSD)
+	fiatCurrency, paymentMethod, amountFiat := normalizePixRail(req.FiatCurrency, req.PaymentMethod, req.AmountFiat, req.AmountBRL)
 	if fiatCurrency == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fiatCurrency invalida"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "somente PIX/BRL e suportado nesta fase"})
 		return
 	}
 	if amountFiat <= 0 {
@@ -125,11 +130,16 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cryptoAmount := payout / rate
-	paymentPayload := buildPaymentPayload(paymentMethod)
-	amountBRL := 0.0
-	if fiatCurrency == "BRL" {
-		amountBRL = amountFiat
+	paymentPayload := buildPaymentPayload()
+	customerAudit := buildCustomerAudit(s.cfg.LGPDSecret,
+		firstNonEmpty(req.PixCpf, req.CPF),
+		firstNonEmpty(req.PixPhone, req.Phone),
+		firstNonEmpty(req.Email, req.CustomerEmail),
+	)
+	if len(customerAudit) > 0 {
+		paymentPayload["customer"] = customerAudit
 	}
+	amountBRL := amountFiat
 	status := "aguardando_" + paymentMethod
 	buy, err := s.db.CreateBuyOrder(r.Context(), database.BuyOrderInput{
 		Status:            status,
@@ -152,12 +162,12 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent()})
+	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent(), "customer": customerAudit})
 	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"requestId": requestID(r), "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "payoutFiat": payout,
 		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "destAddress": buy.DestAddress,
-		"payment": paymentPayload,
+		"pixKey": paymentPayload["pixKey"], "qrCodeUrl": paymentPayload["qrCodeUrl"], "payment": paymentPayload,
 	})
 }
 
@@ -213,14 +223,13 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
-	var amountBRL, amountUSD, amountFiat float64
+	var amountBRL, amountFiat float64
 	mode := "buy"
 	asset := "USDT"
 	fiatCurrency := "BRL"
 	paymentMethod := "pix"
 	if r.Method == http.MethodGet {
 		amountBRL, _ = strconv.ParseFloat(r.URL.Query().Get("amountBRL"), 64)
-		amountUSD, _ = strconv.ParseFloat(r.URL.Query().Get("amountUSD"), 64)
 		amountFiat, _ = strconv.ParseFloat(r.URL.Query().Get("amountFiat"), 64)
 		mode = defaultString(r.URL.Query().Get("mode"), mode)
 		asset = defaultString(r.URL.Query().Get("asset"), asset)
@@ -229,7 +238,6 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	} else {
 		var req struct {
 			AmountBRL     float64 `json:"amountBRL"`
-			AmountUSD     float64 `json:"amountUSD"`
 			AmountFiat    float64 `json:"amountFiat"`
 			FiatCurrency  string  `json:"fiatCurrency"`
 			PaymentMethod string  `json:"paymentMethod"`
@@ -241,7 +249,6 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		amountBRL = req.AmountBRL
-		amountUSD = req.AmountUSD
 		amountFiat = req.AmountFiat
 		mode = defaultString(req.Mode, mode)
 		asset = defaultString(req.Asset, asset)
@@ -258,9 +265,9 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
-	fiatCurrency, paymentMethod, amountFiat = normalizeBuyRail(fiatCurrency, paymentMethod, amountFiat, amountBRL, amountUSD)
+	fiatCurrency, paymentMethod, amountFiat = normalizePixRail(fiatCurrency, paymentMethod, amountFiat, amountBRL)
 	if fiatCurrency == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "rail de pagamento invalido"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "somente PIX/BRL e suportado nesta fase"})
 		return
 	}
 	if amountFiat <= 0 {
@@ -549,9 +556,6 @@ func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	secret := defaultString(s.cfg.PixWebhookSecret, s.cfg.WebhookSecret)
 	signature := r.Header.Get("x-pagbank-signature")
-	if signature == "" {
-		signature = r.Header.Get("x-stripe-signature")
-	}
 	if !validHMAC(secret, raw, signature) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invÃ¡lida"})
 		return
@@ -745,45 +749,49 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
-func normalizeBuyRail(currency, method string, amountFiat, amountBRL, amountUSD float64) (string, string, float64) {
+func normalizePixRail(currency, method string, amountFiat, amountBRL float64) (string, string, float64) {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	method = strings.ToLower(strings.TrimSpace(method))
 	if currency == "" {
-		switch {
-		case amountUSD > 0:
-			currency = "USD"
-		default:
-			currency = "BRL"
-		}
+		currency = "BRL"
 	}
 	if method == "" {
-		if currency == "USD" {
-			method = "stripe"
-		} else {
-			method = "pix"
-		}
+		method = "pix"
 	}
 	if amountFiat <= 0 {
-		if currency == "USD" {
-			amountFiat = amountUSD
-		} else {
-			amountFiat = amountBRL
-		}
+		amountFiat = amountBRL
 	}
-	if (currency == "BRL" && method != "pix") || (currency == "USD" && method != "stripe") {
-		return "", "", 0
-	}
-	if currency != "BRL" && currency != "USD" {
+	if currency != "BRL" || method != "pix" {
 		return "", "", 0
 	}
 	return currency, method, amountFiat
 }
 
-func buildPaymentPayload(method string) map[string]any {
-	if method == "stripe" {
-		return map[string]any{"provider": "stripe", "status": "requires_payment", "checkoutUrl": ""}
-	}
+func buildPaymentPayload() map[string]any {
 	return map[string]any{"provider": "pix", "pixKey": "chavepix@nexswap.com", "qrCodeUrl": "/images/qrcode.png"}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func buildCustomerAudit(secret, cpf, phone, email string) map[string]any {
+	customer := make(map[string]any)
+	if hash := privacy.Hash(cpf, secret); hash != "" {
+		customer["cpfHash"] = hash
+	}
+	if hash := privacy.Hash(phone, secret); hash != "" {
+		customer["phoneHash"] = hash
+	}
+	if hash := privacy.Hash(email, secret); hash != "" {
+		customer["emailHash"] = hash
+	}
+	return customer
 }
 
 func clientIP(r *http.Request) string {
