@@ -1,12 +1,12 @@
 <div align="center\">
 <img src="https://res.cloudinary.com/limpeja/image/upload/v1770993671/swap_1_mvctri.png" alt="Swappy Logo" width="320">
-<h3>Swappy Financial Core & Engine 🚀</h3>
-<p>Infraestrutura Monorepo de Alta Performance para On/Off-Ramp Automatizado de Criptoativos (USDT/BRL)</p>
+<h3>Swappy Financial Core </h3>
+<p>Infraestrutura de Alta Performance para On/Off-Ramp Automatizado de Criptoativos (USDT/BRL)</p>
 </div>
 
 ---
 
-## 🏗️ 1. Visão Arquitetural do Ecossistema
+##  1. Visão Arquitetural do Ecossistema
 
 O **Swappy Financial Core** é uma stack transacional de nível industrial desenhada especificamente para operações de liquidação instantânea de criptoativos (*Sell/Off-ramp* e *Buy/On-ramp*). O sistema foi arquitetado sob o padrão de **Monorepo em Go**, separando estritamente a API pública de I/O, os Workers assíncronos orientados a eventos e o Cofre Criptográfico de Assinaturas (`signer`).
 
@@ -21,7 +21,7 @@ O **Swappy Financial Core** é uma stack transacional de nível industrial desen
 
 ---
 
-## ⚡ 2. Porquê Go? (Decisões de Engenharia de Produção)
+##  2. Porquê Go? (Decisões de Engenharia de Produção)
 
 A infraestrutura original em Node.js (Express) apresentava gargalos críticos para a escala financeira real que foram mitigados pela migração para Go:
 
@@ -52,6 +52,6 @@ Isso permite gerar bilhões de endereços de depósitos monitorados pelo `Onchai
 
 ---
 
-## 🔄 4. Ciclo de Vida Transacional (Idempotência Célula-Mãe)
+##  4. Ciclo de Vida Transacional (Idempotência Célula-Mãe)
 
 Para evitar o pior cenário de um gateway financeiro — o **Duplo Gasto** ou **Dupla Liquidação** (enviar dois PIX para o mesmo depósito ou assinar duas transferências on-chain por instabilidade de rede), implementamos o padrão de **Idempotência Persistida**.
