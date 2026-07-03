@@ -1,12 +1,12 @@
-<div align="center\">
+<div align="center">
 <img src="https://res.cloudinary.com/limpeja/image/upload/v1770993671/swap_1_mvctri.png" alt="Swappy Logo" width="320">
-<h3>Swappy Financial Core </h3>
+<h3>Swappy Financial Core</h3>
 <p>Infraestrutura de Alta Performance para On/Off-Ramp Automatizado de Criptoativos (USDT/BRL)</p>
 </div>
 
 ---
 
-##  1. Visão Arquitetural do Ecossistema
+## 1. Visão Arquitetural do Ecossistema
 
 O **Swappy Financial Core** é uma stack transacional de nível industrial desenhada especificamente para operações de liquidação instantânea de criptoativos (*Sell/Off-ramp* e *Buy/On-ramp*). O sistema foi arquitetado sob o padrão de **Monorepo em Go**, separando estritamente a API pública de I/O, os Workers assíncronos orientados a eventos e o Cofre Criptográfico de Assinaturas (`signer`).
 
@@ -21,13 +21,13 @@ O **Swappy Financial Core** é uma stack transacional de nível industrial desen
 
 ---
 
-##  2. Porquê Go? (Decisões de Engenharia de Produção)
+## 2. Porquê Go? (Decisões de Engenharia de Produção)
 
 A infraestrutura original em Node.js (Express) apresentava gargalos críticos para a escala financeira real que foram mitigados pela migração para Go:
 
 * **Gerenciamento de CPU-Bound vs I/O-Bound:** A validação e geração de assinaturas criptográficas (HMAC-SHA256 e Criptografia de Curva Elíptica ECDSA) são operações intensivas de CPU. No Node.js, isso bloqueava o *Event Loop Single-Threaded*, atrasando requisições HTTP de entrada. O Go resolve isto nativamente escalonando Goroutines entre múltiplos cores de CPU via *M:N Scheduler*.
 * **Segurança e Imutabilidade de Memória:** Strings em Node/V8 podem sofrer vazamento em buffers compartilhados em caso de *memory dumping* após falhas catastróficas. O Go oferece tipagem estática e total controle sobre ponteiros e arrays de bytes (`[]byte`), permitindo que dados sensíveis de chaves e buffers de criptografia sejam limpos da memória de forma previsível e segura.
-* **Race Detector Nativo:** Sistemas de criptografia que gerenciam saldos concorrentes não podem sofrer de *Race Conditions*. O compilador do Go traz a flag `-race`, utilizada em nossas esteiras de CI/CD para auditar matematicamente se duas threads tentaram atualizar ou liquidar a mesma ordem ao mesmo tempo.
+* **Race Detector Native:** Sistemas de criptografia que gerenciam saldos concorrentes não podem sofrer de *Race Conditions**. O compilador do Go traz a flag `-race`, utilizada em nossas esteiras de CI/CD para auditar matematicamente se duas threads tentaram atualizar ou liquidar a mesma ordem ao mesmo tempo.
 
 ---
 
@@ -40,7 +40,11 @@ $$\text{Digest} = \text{HMAC-SHA256}\Big(\text{HMAC\_SECRET}, \; \text{x-ts} \pa
 
 Onde:
 * $\parallel$ representa a concatenação binária exata dos componentes.
-* `x-ts` é o Unix Timestamp da requisição. O Signer rejeita requisições onde $| \text{Tempo\_Atual} - \text{x-ts} | > 60\text{s}$, eliminando **Ataques de Replay**.
+* `x-ts` é o Unix Timestamp da requisição. O Signer rejeita requisições onde:
+
+$$| \text{Tempo\_Atual} - \text{x-ts} | > 60\text{s}$$
+
+eliminando **Ataques de Replay**.
 * `x-nonce` é um identificador único de 16 caracteres. O Signer salva cada nonce no banco com índice `UNIQUE`. Se o mesmo nonce for enviado duas vezes na janela válida de tempo, a transação sofre um *abort* imediato no banco de dados.
 
 ### Derivação de Carteiras Determinísticas (Padrão BIP44)
@@ -52,6 +56,129 @@ Isso permite gerar bilhões de endereços de depósitos monitorados pelo `Onchai
 
 ---
 
-##  4. Ciclo de Vida Transacional (Idempotência Célula-Mãe)
+## 4. Ciclo de Vida Transacional (Idempotência Célula-Mãe)
 
 Para evitar o pior cenário de um gateway financeiro — o **Duplo Gasto** ou **Dupla Liquidação** (enviar dois PIX para o mesmo depósito ou assinar duas transferências on-chain por instabilidade de rede), implementamos o padrão de **Idempotência Persistida**.
+
+### O Mecanismo da Trava Transacional (Idempotência no Postgres)
+
+Para blindar o fluxo contra falhas de rede, timeouts ou retentativas automáticas, o sistema utiliza o banco de dados como única fonte da verdade (*Single Source of Truth*), aplicando uma constraint de chave única (`PRIMARY KEY`) em um bloco transacional isolado:
+
+```sql
+CREATE TABLE IF NOT EXISTS signer_idempotency (
+    idempotency_key VARCHAR(128) PRIMARY KEY,
+    tx_hash VARCHAR(128) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+### O Algoritmo de Execução Segura
+
+* **Entrada de Evento:** Um evento de liquidação de compra ou varredura entra com uma chave exclusiva (ex: `idempotencyKey: "sweep-order-550e8400"`).
+* **Abertura de Transação:** O worker inicia um bloco atômico no PostgreSQL (`BEGIN TRANSACTION;`).
+* **Verificação de Chave:** O sistema tenta ler a chave na tabela `signer_idempotency`:
+  * **Se a chave já existir (Cache Hit):** A transação sofre um *Rollback* instantâneo no banco de dados. O sistema recupera o `tx_hash` gravado anteriormente e responde com `StatusCode 200`. Nenhuma nova operação financeira ou chamada de assinatura blockchain é disparada.
+  * **Se a chave não existir (Cache Miss):** O sistema prossegue com a assinatura criptográfica via curva elíptica ECDSA, envia o payload para a rede (EVM/TRON), captura o hash retornado pela blockchain, insere o registro na tabela e executa o `COMMIT;`.
+
+---
+
+### 📂 5. Organização do Código (Árvore Estrutural do Monorepo)
+
+O projeto está estruturado em um padrão limpo de camadas (*Clean Architecture*) usando pacotes desacoplados e tipagem estática:
+
+```text
+meu-gateway-go/
+├── cmd/
+│   └── api/                        # Ponto de entrada do servidor HTTP Core público
+├── internal/
+│   ├── config/                     # Validação e parser de variáveis de ambiente (.env)
+│   ├── database/                   # Repositórios SQL, pools do Postgres e migrações
+│   └── workers/                    # Daemons assíncronos orientados a eventos
+│       ├── bus.go                  # Event Bus concorrente thread-safe usando sync.RWMutex
+│       ├── onchain_worker.go       # Listener / Poller de nós RPC de Blockchain
+│       ├── payout_worker.go        # Executor de ordens de liquidação PIX (PagBank)
+│       ├── price_worker.go         # Sincronizador de cotação institucional com TTL
+│       └── sweep_worker.go         # Varredura automática de saldos de endereços filhos
+├── signer/                         # Microsserviço Cofre Isolado (Assinador EVM/TRON)
+│   ├── main.go                     # Servidor HTTP privado do Signer
+│   └── crypto_test.go              # Testes unitários matemáticos do escudo HMAC
+└── tests/                          # SUÍTE DE TESTES INTEGRADOS DE ALTA ESCALA
+    ├── test_helpers.go             # Helper do Testcontainers para ciclo de vida do Docker
+    ├── signer_integration_test.go  # Testes E2E do Signer baseados nos fluxos de payload (.ps1)
+    └── api_order_integration_test.go # Testes E2E de criação e liquidação de ordens
+
+    ### 🧪 6. Elite Automated Testing Suite
+
+Para garantir confiabilidade de nível de produção antes de qualquer deploy, a estratégia de testes é dividida em duas camadas complementares.
+
+#### 6.1 Fast Unit Tests (In-Memory)
+
+Valida exclusivamente lógica de negócio, cálculos financeiros, manipulação de buffers, precisão decimal, criptografia HMAC, validações e componentes puros, sem qualquer dependência externa.
+
+```bash
+# Execute only fast unit tests
+go test -v -short ./...
+```
+
+#### 6.2 Integration Tests with Real PostgreSQL (Testcontainers)
+
+A camada de integração utiliza **Testcontainers-Go** para provisionar automaticamente um banco PostgreSQL limpo durante cada execução.
+
+O helper de testes inicializa um container oficial (`postgres:15-alpine`), aplica todas as migrações reais do projeto, executa a suíte completa e remove completamente o ambiente ao término dos testes.
+
+Essa abordagem garante que toda a camada de persistência seja validada contra um banco real, eliminando inconsistências entre ambientes de desenvolvimento e produção.
+
+Além disso, todos os testes podem ser executados com o **Go Race Detector**, responsável por identificar condições de corrida (*data races*) entre goroutines concorrentes.
+
+```bash
+# Integration tests with Race Detector enabled
+go test -v -race ./tests/...
+```
+
+---
+
+### 🐳 7. Production Deployment Pipeline
+
+A aplicação utiliza uma estratégia de **Multi-Stage Docker Build**, separando completamente o ambiente de compilação do ambiente de execução.
+
+No primeiro estágio, todas as dependências são resolvidas e o binário é compilado estaticamente.
+
+O segundo estágio gera uma imagem extremamente enxuta baseada em Alpine Linux, contendo apenas o executável final e os certificados necessários para comunicação TLS, reduzindo significativamente o tamanho da imagem e a superfície de ataque.
+
+```dockerfile
+# Stage 1 - Build
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux \
+    go build -ldflags="-w -s" \
+    -o /engine ./cmd/api/main.go
+
+# Stage 2 - Runtime
+FROM alpine:3.19
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /
+
+COPY --from=builder /engine /engine
+
+EXPOSE 4010
+
+USER 65534:65534
+
+ENTRYPOINT ["/engine"]
+```
+
+#### 🛡️ Production Security Notes
+
+- Multi-stage builds removem completamente o toolchain do Go da imagem final.
+- O processo é executado como usuário não privilegiado (`UID 65534`), evitando execução como **root**.
+- Apenas certificados CA e timezone são incluídos na imagem de produção.
+- As flags `-ldflags="-w -s"` removem símbolos e informações de depuração do executável, reduzindo significativamente seu tamanho e dificultando processos de engenharia reversa.
+- O resultado é um artefato leve, otimizado para produção e com menor superfície de ataque.
