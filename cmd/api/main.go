@@ -22,6 +22,9 @@ func main() {
 	log.Println("Iniciando o ecossistema concorrente em Go...")
 
 	cfg := config.LoadConfig()
+	if err := cfg.ValidateProduction(); err != nil {
+		log.Fatalf("Configuracao invalida para producao: %v", err)
+	}
 
 	db, err := database.ConnectPostgres(cfg)
 	if err != nil {
