@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"strconv"
 
@@ -9,11 +8,11 @@ import (
 )
 
 type SignerConfig struct {
-	EVMPrivateKey      string
-	RPCURL             string
-	HMACSecret         string
-	HMACMaxSkewSec     int
-	Port               string
+	EVMPrivateKey  string
+	RPCURL         string
+	HMACSecret     string
+	HMACMaxSkewSec int
+	Port           string
 }
 
 func LoadSignerConfig() *SignerConfig {
