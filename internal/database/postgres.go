@@ -464,6 +464,68 @@ func (db *DB) UpdateBuyOrderStatus(ctx context.Context, id, status string, extra
 	return db.AddBuyEvent(ctx, id, "buy."+status, extra)
 }
 
+func (db *DB) ApplyBuyProviderWebhook(ctx context.Context, buyOrderID, providerID, providerStatus, status string, extra map[string]any) (bool, error) {
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	requestID := requestIDFromPayload(extra)
+	providerPayload := map[string]any{"requestId": requestID, "providerId": providerID, "status": providerStatus}
+	rawProvider, _ := json.Marshal(providerPayload)
+	if providerID != "" {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO buy_order_events (id, buy_order_id, request_id, type, payload)
+			 VALUES ($1,$2,$3,'webhook.provider',$4)
+			 ON CONFLICT DO NOTHING`,
+			NewID(), buyOrderID, nullableString(requestID), rawProvider)
+		if err != nil {
+			return false, err
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		if rows == 0 {
+			return true, nil
+		}
+	}
+
+	txHashOut, _ := extra["txHashOut"].(string)
+	providerPaymentID, _ := extra["providerPaymentId"].(string)
+	errMsg, _ := extra["error"].(string)
+	if providerPaymentID == "" {
+		providerPaymentID = providerID
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE buy_orders SET status = $2,
+			tx_hash_out = COALESCE(NULLIF($3,''), tx_hash_out),
+			provider_payment_id = COALESCE(NULLIF($4,''), provider_payment_id),
+			error = COALESCE(NULLIF($5,''), error),
+			paid_at = CASE WHEN $2 IN ('pago_fiat','pago_pix') AND paid_at IS NULL THEN now() ELSE paid_at END,
+			settled_at = CASE WHEN $2 IN ('pago_fiat','pago_pix') AND settled_at IS NULL THEN now() ELSE settled_at END,
+			delivered_at = CASE WHEN $2 IN ('enviado','delivered','confirmado') AND delivered_at IS NULL THEN now() ELSE delivered_at END,
+			updated_at = now()
+		WHERE id = $1
+		  AND NOT (status IN ('enviado','delivered','confirmado') AND $2 = 'erro')`,
+		buyOrderID, status, txHashOut, providerPaymentID, errMsg)
+	if err != nil {
+		return false, err
+	}
+	rawStatus, _ := json.Marshal(extra)
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO buy_order_events (id, buy_order_id, request_id, type, payload) VALUES ($1,$2,$3,$4,$5)`,
+		NewID(), buyOrderID, nullableString(requestID), "buy."+status, rawStatus)
+	if err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
 func (db *DB) AddBuyEvent(ctx context.Context, buyOrderID, eventType string, payload any) error {
 	raw, _ := json.Marshal(payload)
 	requestID := requestIDFromPayload(payload)
