@@ -1,18 +1,23 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 // Config centraliza todas as variáveis do seu .env de forma tipada e segura
 type Config struct {
+	Environment            string
+	AllowSimulations       bool
 	DatabaseURL            string
 	AllowedOrigins         string
 	WebhookSecret          string
+	StripeWebhookSecret    string
 	Port                   string
 	OrderMinBrl            float64
 	OrderMaxBrl            float64
@@ -46,11 +51,13 @@ type Config struct {
 	PagSeguroApiToken   string
 	PagSeguroApiBaseUrl string
 	PixWebhookSecret    string
+	PixChargeEndpoint   string
 
 	// Tesouraria / signer / sweep
 	TreasuryHot       string
 	TreasuryCold      string
 	SignerUrl         string
+	SignerNetwork     string
 	SignerHmacSecret  string
 	EnableSweepWorker bool
 	EnableSweepStub   bool
@@ -80,9 +87,12 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
+		Environment:            getEnv("APP_ENV", getEnv("GO_ENV", "development")),
+		AllowSimulations:       getEnvAsBool("ALLOW_SIMULATIONS", true),
 		DatabaseURL:            getEnv("DATABASE_URL", ""),
 		AllowedOrigins:         getEnv("ALLOWED_ORIGINS", "http://localhost:5173"),
 		WebhookSecret:          getEnv("WEBHOOK_SECRET", ""),
+		StripeWebhookSecret:    getEnv("STRIPE_WEBHOOK_SECRET", ""),
 		Port:                   getEnv("PORT", "3000"),
 		OrderMinBrl:            getEnvAsFloat("ORDER_MIN_BRL", 10.0),
 		OrderMaxBrl:            getEnvAsFloat("ORDER_MAX_BRL", 10000.0),
@@ -113,10 +123,12 @@ func LoadConfig() *Config {
 		PagSeguroApiToken:   getEnv("PAGSEGURO_API_TOKEN", ""),
 		PagSeguroApiBaseUrl: getEnv("PAGSEGURO_API_BASE_URL", "https://api.pagseguro.com"),
 		PixWebhookSecret:    getEnv("PIX_WEBHOOK_SECRET", ""),
+		PixChargeEndpoint:   getEnv("PIX_CHARGE_ENDPOINT", "/orders"),
 
 		TreasuryHot:       getEnv("TREASURY_HOT", ""),
 		TreasuryCold:      getEnv("TREASURY_COLD", ""),
 		SignerUrl:         getEnv("SIGNER_URL", ""),
+		SignerNetwork:     strings.ToLower(getEnv("SIGNER_NETWORK", "tron")),
 		SignerHmacSecret:  getEnv("SIGNER_HMAC_SECRET", ""),
 		EnableSweepWorker: getEnvAsBool("ENABLE_SWEEP_WORKER", false),
 		EnableSweepStub:   getEnvAsBool("ENABLE_SWEEP_STUB", false),
@@ -135,6 +147,49 @@ func LoadConfig() *Config {
 		OpsEmail:      getEnv("OPS_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
 		LGPDSecret:    getEnv("LGPD_SECRET", ""),
 	}
+}
+
+func (c *Config) IsProduction() bool {
+	env := strings.ToLower(strings.TrimSpace(c.Environment))
+	return env == "production" || env == "prod"
+}
+
+func (c *Config) ValidateProduction() error {
+	if !c.IsProduction() {
+		return nil
+	}
+	required := map[string]string{
+		"DATABASE_URL":        c.DatabaseURL,
+		"LGPD_SECRET":         c.LGPDSecret,
+		"WEBHOOK_SECRET":      c.WebhookSecret,
+		"PIX_WEBHOOK_SECRET":  c.PixWebhookSecret,
+		"SIGNER_URL":          c.SignerUrl,
+		"SIGNER_HMAC_SECRET":  c.SignerHmacSecret,
+		"TRON_XPUB":           c.TronXPub,
+		"TRON_USDT_CONTRACT":  c.TronUsdtContract,
+		"TRON_FULLNODE_URL":   c.TronFullNodeURL,
+		"PAGSEGURO_API_TOKEN": c.PagSeguroApiToken,
+		"TREASURY_HOT":        c.TreasuryHot,
+	}
+	var missing []string
+	for key, value := range required {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("configuracao de producao incompleta: %s", strings.Join(missing, ", "))
+	}
+	if c.AllowSimulations {
+		return fmt.Errorf("ALLOW_SIMULATIONS deve ser false em producao")
+	}
+	if c.EnableSweepStub {
+		return fmt.Errorf("ENABLE_SWEEP_STUB deve ser false em producao")
+	}
+	if strings.ToLower(strings.TrimSpace(c.SignerNetwork)) != "tron" {
+		return fmt.Errorf("SIGNER_NETWORK deve ser tron em producao")
+	}
+	return nil
 }
 
 // Auxiliares para leitura e conversão de tipos
