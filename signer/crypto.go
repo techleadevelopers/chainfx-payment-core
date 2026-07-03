@@ -46,3 +46,7 @@ func ValidateHMAC(secret string, maxSkew int, tsStr, nonce, hmacHeader string, b
 
 	return nil
 }
+
+func validateHMAC(secret string, maxSkew int64, tsStr, nonce, hmacHeader string, body []byte) error {
+	return ValidateHMAC(secret, int(maxSkew), tsStr, nonce, hmacHeader, body)
+}
