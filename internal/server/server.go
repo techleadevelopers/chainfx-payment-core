@@ -33,6 +33,8 @@ type Server struct {
 	limiter *rateLimiter
 }
 
+type requestIDContextKey struct{}
+
 func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, mailer *email.Service) *Server {
 	return &Server{
 		cfg:     cfg,
@@ -64,7 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/email/test", s.handleEmailTest)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]any{"ok": true}) })
 	mux.HandleFunc("GET /readyz", s.handleReady)
-	return securityHeaders(cors(s.cfg, logRequests(mux)))
+	return securityHeaders(cors(s.cfg, withRequestID(logRequests(mux))))
 }
 
 func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +138,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		FiatCurrency:      fiatCurrency,
 		PaymentMethod:     paymentMethod,
 		ProviderPaymentID: req.ProviderPaymentID,
+		RequestID:         requestID(r),
 		FeeBRL:            fee,
 		PayoutBRL:         payout,
 		CryptoAmount:      cryptoAmount,
@@ -149,8 +152,8 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent()})
-	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
+	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent()})
+	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"requestId": requestID(r), "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "payoutFiat": payout,
 		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "destAddress": buy.DestAddress,
@@ -380,6 +383,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		Network:           network,
 		RateLocked:        rate,
 		RateLockExpiresAt: time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
+		RequestID:         requestID(r),
 		PixCpf:            req.PixCpf,
 		PixPhone:          req.PixPhone,
 		DerivationIndex:   idx,
@@ -388,8 +392,8 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"ip": clientIP(r), "userAgent": r.UserAgent()})
-	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"amountBRL": req.AmountBRL}})
+	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent()})
+	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"requestId": requestID(r), "amountBRL": req.AmountBRL}})
 	s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. Endereço: %s", order.ID, req.AmountBRL, depositAddress))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": order.ID, "orderId": order.ID, "status": order.Status, "address": depositAddress, "depositAddress": depositAddress,
@@ -462,7 +466,7 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "duplicate": true})
 			return
 		}
-		_ = s.db.AddEvent(r.Context(), id, "idempotency", map[string]any{"key": idem, "endpoint": "deposit"})
+		_ = s.db.AddEvent(r.Context(), id, "idempotency", map[string]any{"requestId": requestID(r), "key": idem, "endpoint": "deposit"})
 	}
 	order, err := s.db.GetOrder(r.Context(), id)
 	if err != nil || order == nil {
@@ -473,7 +477,7 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "status atual não permite depósito"})
 		return
 	}
-	if err := s.db.UpdateOrderStatus(r.Context(), id, "pago", map[string]any{"depositTx": req.TxHash, "depositAmount": req.Amount}); err != nil {
+	if err := s.db.UpdateOrderStatus(r.Context(), id, "pago", map[string]any{"requestId": requestID(r), "depositTx": req.TxHash, "depositAmount": req.Amount}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -499,10 +503,10 @@ func (s *Server) handlePayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := "erro"
-	extra := map[string]any{"error": req.Error}
+	extra := map[string]any{"requestId": requestID(r), "error": req.Error}
 	if strings.HasPrefix(strings.ToLower(req.Status), "conclu") {
 		status = "concluida"
-		extra = map[string]any{"txHash": req.ProviderID}
+		extra = map[string]any{"requestId": requestID(r), "txHash": req.ProviderID}
 	}
 	if err := s.db.UpdateOrderStatus(r.Context(), r.PathValue("id"), status, extra); err != nil {
 		writeError(w, err)
@@ -529,10 +533,10 @@ func (s *Server) handlePixWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := "erro"
-	extra := map[string]any{"error": req.Error}
+	extra := map[string]any{"requestId": requestID(r), "error": req.Error}
 	if strings.HasPrefix(strings.ToLower(req.Status), "conclu") {
 		status = "concluida"
-		extra = map[string]any{"txHash": req.ProviderID}
+		extra = map[string]any{"requestId": requestID(r), "txHash": req.ProviderID}
 	}
 	if err := s.db.UpdateOrderStatus(r.Context(), req.OrderID, status, extra); err != nil {
 		writeError(w, err)
@@ -574,16 +578,16 @@ func (s *Server) handlePixWebhookBuy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	status := "erro"
-	extra := map[string]any{"error": req.Error}
+	extra := map[string]any{"requestId": requestID(r), "error": req.Error}
 	if strings.HasPrefix(strings.ToLower(req.Status), "conclu") {
 		status = "pago_fiat"
-		extra = map[string]any{"providerPaymentId": req.ProviderID}
+		extra = map[string]any{"requestId": requestID(r), "providerPaymentId": req.ProviderID}
 	}
 	if err := s.db.UpdateBuyOrderStatus(r.Context(), req.BuyID, status, extra); err != nil {
 		writeError(w, err)
 		return
 	}
-	_ = s.db.AddBuyEvent(r.Context(), req.BuyID, "webhook.provider", map[string]any{"providerId": req.ProviderID, "status": req.Status})
+	_ = s.db.AddBuyEvent(r.Context(), req.BuyID, "webhook.provider", map[string]any{"requestId": requestID(r), "providerId": req.ProviderID, "status": req.Status})
 	if status == "pago_fiat" {
 		s.workers.Bus.Publish(workers.Event{Type: "buy.paid", OrderID: req.BuyID, Payload: map[string]any{"providerId": req.ProviderID}})
 	}
@@ -711,8 +715,27 @@ func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		slog.Info("http_request", "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(start).Milliseconds())
+		slog.Info("http_request", "request_id", requestID(r), "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(start).Milliseconds())
 	})
+}
+
+func withRequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+		if id == "" {
+			id = database.NewID()
+		}
+		w.Header().Set("X-Request-Id", id)
+		ctx := context.WithValue(r.Context(), requestIDContextKey{}, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func requestID(r *http.Request) string {
+	if value, ok := r.Context().Value(requestIDContextKey{}).(string); ok {
+		return value
+	}
+	return ""
 }
 
 func defaultString(value, fallback string) string {
