@@ -67,6 +67,9 @@ type Config struct {
 	SMTPFromEmail string
 	SMTPFromName  string
 	OpsEmail      string
+
+	// LGPD / auditoria
+	LGPDSecret string
 }
 
 // LoadConfig é o cara que lê o .env e joga para dentro da estrutura acima
@@ -128,6 +131,7 @@ func LoadConfig() *Config {
 		SMTPFromEmail: getEnv("SMTP_FROM_EMAIL", ""),
 		SMTPFromName:  getEnv("SMTP_FROM_NAME", "Swappy Financial"),
 		OpsEmail:      getEnv("OPS_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
+		LGPDSecret:    getEnv("LGPD_SECRET", ""),
 	}
 }
 
