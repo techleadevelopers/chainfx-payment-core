@@ -51,10 +51,12 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 func (s *Server) transactionFee(amountFiat float64, fiatCurrency string, rate float64) float64 {
 	percentFee := amountFiat * (float64(s.cfg.FeeBps) / 10000)
 	fixedFee := s.cfg.FeeFixedUsd
+	perUsdtFee := s.cfg.FeePerUsdtUsd * (amountFiat / rate)
 	if strings.EqualFold(fiatCurrency, "BRL") {
 		fixedFee = s.cfg.FeeFixedUsd * rate
+		perUsdtFee = s.cfg.FeePerUsdtUsd * amountFiat
 	}
-	fee := percentFee + fixedFee
+	fee := percentFee + fixedFee + perUsdtFee
 	if strings.EqualFold(fiatCurrency, "BRL") && s.cfg.FeeMinBrl > fee {
 		fee = s.cfg.FeeMinBrl
 	}
@@ -63,16 +65,20 @@ func (s *Server) transactionFee(amountFiat float64, fiatCurrency string, rate fl
 
 func (s *Server) feePolicy(fiatCurrency string, rate float64) map[string]any {
 	fixedFiat := s.cfg.FeeFixedUsd
+	perUsdtFiat := s.cfg.FeePerUsdtUsd
 	if strings.EqualFold(fiatCurrency, "BRL") {
 		fixedFiat = s.cfg.FeeFixedUsd * rate
+		perUsdtFiat = s.cfg.FeePerUsdtUsd * rate
 	}
 	return map[string]any{
 		"bps":             s.cfg.FeeBps,
 		"percent":         float64(s.cfg.FeeBps) / 100,
 		"fixedUsd":        s.cfg.FeeFixedUsd,
 		"fixedFiat":       fixedFiat,
+		"perUsdtUsd":      s.cfg.FeePerUsdtUsd,
+		"perUsdtFiat":     perUsdtFiat,
 		"fiatCurrency":    strings.ToUpper(fiatCurrency),
-		"description":     "2% + US$2",
+		"description":     "2% + US$0.03 por USDT",
 		"backendEnforced": true,
 	}
 }
@@ -154,14 +160,15 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
-	payout := amountFiat - fee
+	payout := amountFiat
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apÃ³s taxa"})
 		return
 	}
+	totalFiat := amountFiat + fee
 	cryptoAmount := payout / rate
 	buyID := database.NewID()
-	paymentPayload, err := s.createPaymentIntent(r.Context(), buyID, amountFiat, fiatCurrency, paymentMethod)
+	paymentPayload, err := s.createPaymentIntent(r.Context(), buyID, totalFiat, fiatCurrency, paymentMethod)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
@@ -174,13 +181,13 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	if len(customerAudit) > 0 {
 		paymentPayload["customer"] = customerAudit
 	}
-	amountBRL := amountFiat
+	amountBRL := totalFiat
 	status := "aguardando_" + paymentMethod
 	buy, err := s.db.CreateBuyOrder(r.Context(), database.BuyOrderInput{
 		ID:                buyID,
 		Status:            status,
 		AmountBRL:         amountBRL,
-		AmountFiat:        amountFiat,
+		AmountFiat:        totalFiat,
 		FiatCurrency:      fiatCurrency,
 		PaymentMethod:     paymentMethod,
 		ProviderPaymentID: req.ProviderPaymentID,
@@ -199,9 +206,9 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.db.AddBuyEvent(r.Context(), buy.ID, "buy.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent(), "customer": customerAudit})
-	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"requestId": requestID(r), "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
+	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"requestId": requestID(r), "amountFiat": totalFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "payoutFiat": payout,
+		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": totalFiat, "subtotalFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "totalFiat": totalFiat, "payoutFiat": payout,
 		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "network": deliveryNetwork, "destAddress": buy.DestAddress,
 		"feePolicy": s.feePolicy(fiatCurrency, rate),
 		"pixKey":    paymentPayload["pixKey"], "qrCodeUrl": paymentPayload["qrCodeUrl"], "payment": paymentPayload,
@@ -256,7 +263,14 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "preço ainda não carregado"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"brl": price})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"brl":     price,
+		"usd":     s.workers.PriceWorker.GetPrice("USD"),
+		"eur":     s.workers.PriceWorker.GetPrice("EUR"),
+		"usdtbrl": s.workers.PriceWorker.GetPrice("USDTBRL"),
+		"eurusd":  s.workers.PriceWorker.GetPrice("EURUSD"),
+		"btcusdt": s.workers.PriceWorker.GetPrice("BTCUSDT"),
+	})
 }
 
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
@@ -324,18 +338,21 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
-	payout := amountFiat - fee
+	payout := amountFiat
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apos taxa"})
 		return
 	}
+	totalFiat := amountFiat + fee
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":              mode,
 		"asset":             asset,
-		"amountFiat":        amountFiat,
+		"amountFiat":        totalFiat,
+		"subtotalFiat":      amountFiat,
 		"fiatCurrency":      fiatCurrency,
 		"paymentMethod":     paymentMethod,
 		"feeFiat":           fee,
+		"totalFiat":         totalFiat,
 		"payoutFiat":        payout,
 		"feePolicy":         s.feePolicy(fiatCurrency, rate),
 		"rate":              rate,
@@ -402,15 +419,16 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		rate = 5.0
 	}
 	fee := s.transactionFee(req.AmountBRL, "BRL", rate)
-	payout := req.AmountBRL - fee
+	payout := req.AmountBRL
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente após taxa"})
 		return
 	}
+	totalBRL := req.AmountBRL + fee
 	amountUSDT := payout / rate
 	order, err := s.db.CreateOrder(ctx, database.OrderInput{
 		Status:            string(models.StatusAguardandoDeposito),
-		AmountBRL:         req.AmountBRL,
+		AmountBRL:         totalBRL,
 		AmountUSDT:        amountUSDT,
 		FeeBRL:            fee,
 		PayoutBRL:         payout,
@@ -429,11 +447,11 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent()})
-	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"requestId": requestID(r), "amountBRL": req.AmountBRL}})
-	s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. Endereço: %s", order.ID, req.AmountBRL, depositAddress))
+	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"requestId": requestID(r), "amountBRL": totalBRL}})
+	s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. Endereço: %s", order.ID, totalBRL, depositAddress))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": order.ID, "orderId": order.ID, "status": order.Status, "address": depositAddress, "depositAddress": depositAddress,
-		"amountBRL": req.AmountBRL, "amountUSDT": amountUSDT, "btcAmount": amountUSDT, "feeBRL": fee, "payoutBRL": payout,
+		"amountBRL": totalBRL, "subtotalBRL": req.AmountBRL, "amountUSDT": amountUSDT, "btcAmount": amountUSDT, "feeBRL": fee, "totalBRL": totalBRL, "payoutBRL": payout,
 		"rate": rate, "network": network, "feePolicy": s.feePolicy("BRL", rate),
 	})
 }
