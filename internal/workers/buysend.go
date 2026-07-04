@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,11 +132,16 @@ func (bw *BuySendWorker) processBuyOnchainSend(event Event) {
 		return
 	}
 
+	network := strings.ToUpper(strings.TrimSpace(bw.cfg.SignerNetwork))
+	if network == "" || network == "EVM" || network == "BINANCE" || network == "BEP20" {
+		network = "BSC"
+	}
+	tokenContract := bw.cfg.BscUsdtContract
 	payload := map[string]any{
 		"to":             buy.DestAddress,
 		"amount":         fmt.Sprintf("%.8f", buy.CryptoAmount),
-		"tokenContract":  bw.cfg.TronUsdtContract,
-		"network":        "TRON",
+		"tokenContract":  tokenContract,
+		"network":        network,
 		"idempotencyKey": "buy-" + buy.ID,
 	}
 	body, _ := json.Marshal(payload)
