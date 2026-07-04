@@ -168,6 +168,36 @@ Cliente paga Pix -> Webhook confirma -> BuySendWorker dispara da wallet Swappy -
 - Benchmark do fluxo PIX -> delivery em `cmd/benchflow`.
 - Deploy por `Dockerfile` e `railway.json`.
 
+## Segurança de Custódia com EIP-7702
+
+O signer Go inclui uma camada opcional de proteção de custódia baseada em EIP-7702. O objetivo não é executar arbitragem nem alterar o fluxo PIX, mas proteger a hot wallet contra delegações inesperadas de conta EOA.
+
+O EIP-7702 introduz transações `SET_CODE` (`type 0x04`) com `authorizationList`, permitindo que uma EOA autorize temporariamente/de forma controlada a execução de código delegado. Isso é poderoso para account abstraction, batching e session keys, mas também cria um novo risco operacional: se a hot wallet autorizar um delegate desconhecido ou comprometido, a custódia pode ser afetada.
+
+Por isso o signer tem um `CustodyGuard`:
+
+```text
+Signer monitora pending/latest blocks
+-> detecta transações EIP-7702 type 0x04
+-> lê authorizationList
+-> recupera a authority/wallet que assinou a autorização
+-> se a authority for uma wallet protegida e o delegate não estiver na allowlist:
+   signer entra em lockdown
+   /hd/transfer deixa de assinar novas saídas
+```
+
+Configuração opcional no serviço do signer:
+
+```env
+CUSTODY_GUARD_ENABLED=true
+CUSTODY_GUARD_POLL_MS=1500
+CUSTODY_TRUSTED_DELEGATES=0xContratoDelegateSeguro
+CUSTODY_ALLOWED_SELECTORS=
+CUSTODY_PROTECTED_WALLETS=
+```
+
+A hot wallet derivada de `EVM_PRIVATE_KEY` entra automaticamente na lista protegida. `CUSTODY_PROTECTED_WALLETS` serve para adicionar outras carteiras. `CUSTODY_TRUSTED_DELEGATES` deve conter somente contratos auditados e esperados. Se o bytecode de um delegate confiável mudar ou surgir delegate desconhecido, o signer bloqueia a assinatura até intervenção operacional.
+
 ## Arquitetura Tecnica
 
 A documentacao tecnica completa esta em [ARCHITECTURE.md](./ARCHITECTURE.md).
@@ -211,6 +241,8 @@ BSC_XPUB=...
 BSC_USDT_CONTRACT=...
 BSC_FULLNODE_URL=...
 TREASURY_HOT=...
+CUSTODY_GUARD_ENABLED=false
+CUSTODY_TRUSTED_DELEGATES=
 ```
 
 Mais detalhes em [ARCHITECTURE.md](./ARCHITECTURE.md#deploy).
