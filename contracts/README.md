@@ -1,0 +1,111 @@
+# Swappy BSC Contracts
+
+Contratos editaveis para operar custodia/payout em BSC com foco em seguranca operacional. Eles nao substituem o signer Go imediatamente; servem como camada on-chain opcional para reduzir risco de hot wallet direta quando a operacao crescer.
+
+## Contratos
+
+### `SwappyTreasuryVault`
+
+Vault de treasury/payout para USDT/BEP20.
+
+Controles principais:
+
+- owner em duas etapas;
+- guardians com poder de pause/blocklist;
+- operators para payout;
+- allowlist de tokens;
+- allowlist/blocklist de recipients;
+- limite maximo por transferencia;
+- limite diario por token;
+- idempotencia por `operationId`;
+- eventos para auditoria.
+
+Uso recomendado:
+
+```text
+Owner multisig
+        |
+configura token, operadores, guardians e limites
+        |
+Core/signer solicita payout ao operator
+        |
+Vault envia USDT ao cliente respeitando limites
+```
+
+### `SwappyDelegateRegistry`
+
+Registry de delegates EIP-7702 confiaveis.
+
+O signer Go ainda valida delegate e bytecode hash off-chain. O registry e uma fonte on-chain auditavel para governanca, incidentes e revogacao.
+
+### `Swappy7702PayoutDelegate`
+
+Delegate EIP-7702 minimo para payout controlado.
+
+Importante:
+
+- nao possui `execute()` generico;
+- nao permite chamada arbitraria;
+- exige token permitido;
+- exige recipient permitido;
+- usa `operationId` para evitar replay;
+- pode ser pausado.
+
+Antes de colocar esse contrato em `CUSTODY_TRUSTED_DELEGATES`, faca deploy em testnet, registre o bytecode hash, teste com baixo saldo e valide o comportamento do signer Go em `CUSTODY_MODE=shadow` e depois `paper`.
+
+## Setup
+
+```powershell
+cd C:\Users\Paulo\Desktop\payment-gateway\contracts
+npm install
+npm run compile
+npm test
+```
+
+## Deploy BSC Testnet
+
+```powershell
+$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:BSC_TESTNET_RPC_URL="https://data-seed-prebsc-1-s1.binance.org:8545/"
+npm run deploy:testnet
+```
+
+## Deploy BSC Mainnet
+
+```powershell
+$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:BSC_RPC_URL="https://..."
+$env:BSC_USDT_CONTRACT="0x55d398326f99059fF775485246999027B3197955"
+$env:TREASURY_MAX_TRANSFER_USDT="100"
+$env:TREASURY_DAILY_LIMIT_USDT="1000"
+npm run deploy:bsc
+```
+
+Depois do deploy, o script imprime:
+
+```env
+CUSTODY_TRUSTED_DELEGATES=0x...
+TREASURY_CONTRACT=0x...
+DELEGATE_REGISTRY=0x...
+```
+
+Preencha `CUSTODY_TRUSTED_DELEGATES` somente com delegate auditado e validado. Nunca use placeholder como `0xContratoDelegateSeguro`.
+
+## Politica Recomendada
+
+- `owner`: multisig ou carteira operacional separada, nunca a mesma hot wallet do payout.
+- `guardian`: carteira capaz de pausar rapidamente em incidente.
+- `operator`: signer/operador com limite baixo.
+- `TREASURY_MAX_TRANSFER_USDT`: comece pequeno.
+- `TREASURY_DAILY_LIMIT_USDT`: limite menor que o saldo total da hot wallet.
+- `CUSTODY_MODE=shadow` primeiro, depois `paper`.
+
+## O Que Nao Fazer
+
+- Nao coloque todos os fundos no vault antes de testar em testnet.
+- Nao use delegate EIP-7702 com `execute()` generico.
+- Nao permita token contract aberto.
+- Nao use owner EOA sem backup/multisig para saldo alto.
+- Nao configure `CUSTODY_TRUSTED_DELEGATES` com contrato sem bytecode auditado.
