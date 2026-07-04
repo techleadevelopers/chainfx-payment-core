@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS orders (
   payout_brl NUMERIC(18,2),
   address TEXT NOT NULL,
   asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
-  network VARCHAR(32) NOT NULL DEFAULT 'TRON',
+  network VARCHAR(32) NOT NULL DEFAULT 'BSC',
   rate_locked NUMERIC(28,8) NOT NULL,
   rate_lock_expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS sweeps (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   idempotency_key TEXT,
-  amount_trx_fee NUMERIC(28,8),
+  amount_BNB_fee NUMERIC(28,8),
   order_id UUID REFERENCES orders(id)
 );
 
