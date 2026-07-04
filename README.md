@@ -119,7 +119,7 @@ Swappy opera como um **instant settlement orchestration system**: recebe fiat po
 
 ## Sobre o Swappy
 
-Swappy permite comprar e vender stablecoins como USDT de forma rapida, com integracao via PIX e entrega cripto para wallet TRON.
+Swappy permite comprar e vender stablecoins como USDT de forma rapida, com integracao via PIX e entrega cripto para wallet BSC.
 
 Principais diferenciais:
 
@@ -136,7 +136,7 @@ Principais diferenciais:
 
 1. Usuario informa quanto quer pagar em BRL.
 2. API retorna cotacao e quantidade estimada de USDT.
-3. Usuario informa wallet TRON.
+3. Usuario informa wallet BSC.
 4. Gateway cria `buy_order` em `aguardando_pix`.
 5. Cliente paga o PIX.
 6. Webhook bancario confirma pagamento.
@@ -153,7 +153,7 @@ Cliente paga Pix -> Webhook confirma -> BuySendWorker dispara da wallet Swappy -
 ### SELL USDT -> Pix
 
 1. Usuario informa chave PIX e valor BRL.
-2. Gateway gera endereco de deposito TRON deterministico.
+2. Gateway gera endereco de deposito BSC deterministico.
 3. Monitor on-chain confirma deposito USDT.
 4. `PayoutWorker` liquida PIX para o usuario.
 
@@ -205,11 +205,11 @@ WEBHOOK_SECRET=...
 PIX_WEBHOOK_SECRET=...
 PAGSEGURO_API_TOKEN=...
 SIGNER_URL=...
-SIGNER_NETWORK=tron
+SIGNER_NETWORK=BSC
 SIGNER_HMAC_SECRET=...
-TRON_XPUB=...
-TRON_USDT_CONTRACT=...
-TRON_FULLNODE_URL=...
+BSC_XPUB=...
+BSC_USDT_CONTRACT=...
+BSC_FULLNODE_URL=...
 TREASURY_HOT=...
 ```
 
