@@ -395,7 +395,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		PixCpf    string  `json:"pixCpf"`
 		PixPhone  string  `json:"pixPhone"`
 	}
-	if err := json.Unmarshal(raw, &req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON inválido"})
 		return
 	}
