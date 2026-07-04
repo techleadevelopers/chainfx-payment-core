@@ -23,15 +23,15 @@ import (
 	"payment-gateway/internal/models"
 	"payment-gateway/internal/privacy"
 	"payment-gateway/internal/settlement"
-	"payment-gateway/internal/tron"
 	"payment-gateway/internal/workers"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type Server struct {
 	cfg     *config.Config
 	db      *database.DB
 	workers *workers.WorkerManager
-	tron    *tron.Client
 	email   *email.Service
 	limiter *rateLimiter
 }
@@ -43,7 +43,6 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 		cfg:     cfg,
 		db:      db,
 		workers: workerMgr,
-		tron:    tron.NewClient(cfg),
 		email:   mailer,
 		limiter: newRateLimiter(cfg.OrderRateLimitWindowMs, cfg.OrderRateLimitMax),
 	}
@@ -131,8 +130,9 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nÃ£o suportado nesta fase (apenas USDT)"})
 		return
 	}
-	if !tron.IsAddress(req.Address) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereÃ§o TRON invÃ¡lido"})
+	deliveryNetwork := s.deliveryNetwork()
+	if !s.isDeliveryAddress(req.Address) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("endereco %s invalido", deliveryNetwork)})
 		return
 	}
 	fiatCurrency, paymentMethod, amountFiat := normalizePaymentRail(req.FiatCurrency, req.PaymentMethod, req.AmountFiat, req.AmountBRL, req.AmountUSD)
@@ -202,7 +202,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	s.workers.Bus.Publish(workers.Event{Type: "buy.created", OrderID: buy.ID, Payload: map[string]any{"requestId": requestID(r), "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod}})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"buyId": buy.ID, "id": buy.ID, "status": buy.Status, "amountFiat": amountFiat, "fiatCurrency": fiatCurrency, "paymentMethod": paymentMethod, "feeFiat": fee, "payoutFiat": payout,
-		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "destAddress": buy.DestAddress,
+		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "network": deliveryNetwork, "destAddress": buy.DestAddress,
 		"feePolicy": s.feePolicy(fiatCurrency, rate),
 		"pixKey":    paymentPayload["pixKey"], "qrCodeUrl": paymentPayload["qrCodeUrl"], "payment": paymentPayload,
 	})
@@ -369,10 +369,10 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
 		return
 	}
-	network := strings.ToUpper(defaultString(req.Network, "TRON"))
+	network := strings.ToUpper(defaultString(req.Network, "BSC"))
 	asset := strings.ToUpper(defaultString(req.Asset, "USDT"))
-	if network != "TRON" || asset != "USDT" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "somente pedidos TRON/USDT são suportados"})
+	if network != "BSC" || asset != "USDT" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "somente pedidos BSC/USDT sao suportados"})
 		return
 	}
 	ctx := r.Context()
@@ -382,27 +382,18 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if stats.Count >= s.cfg.PixMaxOrdersPer24h || stats.Total+req.AmountBRL > s.cfg.PixMaxBrlPer24h {
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite diário por chave PIX excedido"})
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite diario por chave PIX excedido"})
 		return
 	}
 
 	var idx *int
 	depositAddress := strings.TrimSpace(req.Address)
 	if depositAddress == "" {
-		next, err := s.db.NextDerivationIndex(ctx)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		addr, err := s.tron.DeriveAddress(next)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		idx = &next
-		depositAddress = addr
-	} else if !tron.IsAddress(depositAddress) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereço TRON inválido"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereco BSC de deposito obrigatorio"})
+		return
+	}
+	if !common.IsHexAddress(depositAddress) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereco BSC invalido"})
 		return
 	}
 
@@ -492,7 +483,7 @@ func (s *Server) handleOrderStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
-	if !validHMAC(s.cfg.TronHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
+	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
@@ -534,7 +525,7 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePayout(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
-	if !validHMAC(s.cfg.TronHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
+	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
@@ -676,7 +667,7 @@ func (s *Server) handleStripeWebhookBuy(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleInternalSweep(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
-	if !validHMAC(s.cfg.TronHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
+	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
@@ -689,12 +680,7 @@ func (s *Server) handleInternalSweep(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload inválido"})
 		return
 	}
-	from, err := s.tron.DeriveAddress(req.ChildIndex)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	sweep, err := s.db.CreateSweep(r.Context(), req.ChildIndex, from, req.ToAddr, req.Amount, nil)
+	sweep, err := s.db.CreateSweep(r.Context(), req.ChildIndex, s.cfg.TreasuryHot, req.ToAddr, req.Amount, nil)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -740,7 +726,8 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{
 		"ok":       len(gaps) == 0,
 		"db":       true,
-		"tron":     s.cfg.TronFullNodeURL != "" || s.cfg.TronFullNodeUrl != "",
+		"network":  s.deliveryNetwork(),
+		"bsc":      s.cfg.BscRpcUrls != "" && s.cfg.BscUsdtContract != "",
 		"pix":      s.cfg.PagSeguroApiToken != "" && defaultString(s.cfg.PixWebhookSecret, s.cfg.WebhookSecret) != "",
 		"stripe":   defaultString(s.cfg.StripeWebhookSecret, s.cfg.WebhookSecret) != "",
 		"signer":   s.cfg.SignerUrl != "" && s.cfg.SignerHmacSecret != "",
@@ -755,15 +742,16 @@ func (s *Server) operationalGaps() []string {
 		"pix_webhook":    defaultString(s.cfg.PixWebhookSecret, s.cfg.WebhookSecret) != "",
 		"stripe_webhook": defaultString(s.cfg.StripeWebhookSecret, s.cfg.WebhookSecret) != "",
 		"signer":         s.cfg.SignerUrl != "" && s.cfg.SignerHmacSecret != "",
-		"signer_tron":    strings.EqualFold(s.cfg.SignerNetwork, "tron"),
-		"tron_contract":  s.cfg.TronUsdtContract != "",
-		"tron_fullnode":  s.cfg.TronFullNodeURL != "" || s.cfg.TronFullNodeUrl != "",
-		"tron_xpub":      s.cfg.TronXPub != "",
 		"lgpd_secret":    s.cfg.LGPDSecret != "",
 		"no_simulations": !s.cfg.AllowSimulations,
 		"sweep_not_stub": !s.cfg.EnableSweepStub,
 		"treasury_hot":   s.cfg.TreasuryHot != "",
 	}
+	if strings.EqualFold(s.cfg.SignerNetwork, "bsc") || strings.EqualFold(s.cfg.SignerNetwork, "evm") {
+		checks["signer_bsc"] = true
+		checks["bsc_contract"] = s.cfg.BscUsdtContract != ""
+		checks["bsc_rpc_urls"] = s.cfg.BscRpcUrls != ""
+`t}
 	var gaps []string
 	for name, ok := range checks {
 		if !ok {
@@ -902,6 +890,26 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func (s *Server) deliveryNetwork() string {
+	network := strings.ToUpper(strings.TrimSpace(s.cfg.SignerNetwork))
+	switch network {
+	case "", "EVM", "BINANCE", "BEP20":
+		return "BSC"
+	default:
+		return network
+	}
+}
+
+func (s *Server) isDeliveryAddress(address string) bool {
+	address = strings.TrimSpace(address)
+	switch s.deliveryNetwork() {
+	case "BSC", "EVM":
+		return common.IsHexAddress(address)
+	default:
+		return false
+	}
 }
 
 func normalizePaymentRail(currency, method string, amountFiat, amountBRL, amountUSD float64) (string, string, float64) {
