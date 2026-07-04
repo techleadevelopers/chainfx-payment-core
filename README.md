@@ -340,7 +340,7 @@ LGPD_SECRET=...
 WEBHOOK_SECRET=...
 PIX_WEBHOOK_SECRET=...
 PAGSEGURO_API_TOKEN=...
-SIGNER_URL=...
+SIGNER_URL=http://signer.railway.internal:4010
 SIGNER_NETWORK=BSC
 SIGNER_HMAC_SECRET=...
 BSC_XPUB=...
@@ -359,6 +359,14 @@ TREASURY_LOCKDOWN_THRESHOLD=0
 ```
 
 Mais detalhes em [ARCHITECTURE.md](./ARCHITECTURE.md#deploy).
+
+No Railway, `SIGNER_URL` da API principal deve apontar para a rede privada do service do signer, nao para `https://...up.railway.app`. Se o service do signer se chama `signer` e escuta `PORT=4010`, use:
+
+```env
+SIGNER_URL=http://signer.railway.internal:4010
+```
+
+O dominio publico `*.up.railway.app` fica bloqueado em producao porque exporia o signer na internet. O aviso `Arquivo .env nao encontrado` e normal em cloud quando as variaveis estao configuradas pelo painel do Railway.
 
 ### Custodia, Treasury e EIP-7702
 
