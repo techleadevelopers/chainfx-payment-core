@@ -751,7 +751,7 @@ func (s *Server) operationalGaps() []string {
 		checks["signer_bsc"] = true
 		checks["bsc_contract"] = s.cfg.BscUsdtContract != ""
 		checks["bsc_rpc_urls"] = s.cfg.BscRpcUrls != ""
-`t}
+	}
 	var gaps []string
 	for name, ok := range checks {
 		if !ok {
