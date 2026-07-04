@@ -32,10 +32,10 @@ type Config struct {
 	BuyHotDerivationIndex  int
 
 	// Regras de Limite e Fraude
-	PixMaxOrdersPer24h      int
-	PixMaxBrlPer24h         float64
-	OrderHoldSecForNewDest  int
-	BscDepositTolerancePct  float64
+	PixMaxOrdersPer24h     int
+	PixMaxBrlPer24h        float64
+	OrderHoldSecForNewDest int
+	BscDepositTolerancePct float64
 
 	// PagBank
 	PagSeguroApiToken   string
@@ -98,10 +98,10 @@ func LoadConfig() *Config {
 		FeeMinBrl:              getEnvAsFloat("FEE_MIN_BRL", 0),
 		BuyHotDerivationIndex:  getEnvAsInt("BUY_HOT_DERIVATION_INDEX", 0),
 
-		PixMaxOrdersPer24h:      getEnvAsInt("PIX_MAX_ORDERS_PER_24H", 5),
-		PixMaxBrlPer24h:         getEnvAsFloat("PIX_MAX_BRL_PER_24H", 20000.0),
-		OrderHoldSecForNewDest:  getEnvAsInt("ORDER_HOLD_SEC_FOR_NEW_DEST", 180),
-		BscDepositTolerancePct:  getEnvAsFloat("BSC_DEPOSIT_TOLERANCE_PCT", 0.02),
+		PixMaxOrdersPer24h:     getEnvAsInt("PIX_MAX_ORDERS_PER_24H", 5),
+		PixMaxBrlPer24h:        getEnvAsFloat("PIX_MAX_BRL_PER_24H", 20000.0),
+		OrderHoldSecForNewDest: getEnvAsInt("ORDER_HOLD_SEC_FOR_NEW_DEST", 180),
+		BscDepositTolerancePct: getEnvAsFloat("BSC_DEPOSIT_TOLERANCE_PCT", 0.02),
 
 		PagSeguroApiToken:   getEnv("PAGSEGURO_API_TOKEN", ""),
 		PagSeguroApiBaseUrl: getEnv("PAGSEGURO_API_BASE_URL", "https://api.pagseguro.com"),
