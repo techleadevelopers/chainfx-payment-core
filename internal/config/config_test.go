@@ -36,13 +36,12 @@ func productionReadyConfig() *Config {
 		WebhookSecret:     "webhook-secret",
 		PixWebhookSecret:  "pix-secret",
 		SignerUrl:         "http://signer:4010",
-		SignerNetwork:     "tron",
+		SignerNetwork:     "bsc",
 		SignerHmacSecret:  "signer-secret",
-		TronXPub:          "xpub",
-		TronUsdtContract:  "contract",
-		TronFullNodeURL:   "https://api.trongrid.io",
+		BscRpcUrls:        "https://bnb-mainnet.g.alchemy.com/v2/key-1,https://bnb-mainnet.g.alchemy.com/v2/key-2",
+		BscUsdtContract:   "0x55d398326f99059fF775485246999027B3197955",
 		PagSeguroApiToken: "pagbank-token",
-		TreasuryHot:       "TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+		TreasuryHot:       "0x1111111111111111111111111111111111111111",
 		EnableSweepStub:   false,
 	}
 }
