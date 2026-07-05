@@ -31,6 +31,11 @@ type Config struct {
 	FeePerUsdtUsd          float64
 	FeeMinBrl              float64
 	BuyHotDerivationIndex  int
+	ChainFXLiveSecretKeys  string
+	ChainFXTestSecretKeys  string
+	ChainFXLivePublicKeys  string
+	ChainFXTestPublicKeys  string
+	ChainFXRequireAPIKey   bool
 
 	// Regras de Limite e Fraude
 	PixMaxOrdersPer24h     int
@@ -99,6 +104,11 @@ func LoadConfig() *Config {
 		FeePerUsdtUsd:          getEnvAsFloat("FEE_PER_USDT_USD", 0.03),
 		FeeMinBrl:              getEnvAsFloat("FEE_MIN_BRL", 0),
 		BuyHotDerivationIndex:  getEnvAsInt("BUY_HOT_DERIVATION_INDEX", 0),
+		ChainFXLiveSecretKeys:  getEnv("CHAINFX_LIVE_SECRET_KEYS", ""),
+		ChainFXTestSecretKeys:  getEnv("CHAINFX_TEST_SECRET_KEYS", "sk_test_chainfx_local"),
+		ChainFXLivePublicKeys:  getEnv("CHAINFX_LIVE_PUBLIC_KEYS", ""),
+		ChainFXTestPublicKeys:  getEnv("CHAINFX_TEST_PUBLIC_KEYS", "pk_test_chainfx_local"),
+		ChainFXRequireAPIKey:   getEnvAsBool("CHAINFX_REQUIRE_API_KEY", false),
 
 		PixMaxOrdersPer24h:     getEnvAsInt("PIX_MAX_ORDERS_PER_24H", 5),
 		PixMaxBrlPer24h:        getEnvAsFloat("PIX_MAX_BRL_PER_24H", 20000.0),
