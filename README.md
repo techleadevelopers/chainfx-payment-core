@@ -168,6 +168,184 @@ Cliente paga Pix -> Webhook confirma -> BuySendWorker dispara da wallet Swappy -
 - Benchmark do fluxo PIX -> delivery em `cmd/benchflow`.
 - Deploy por `Dockerfile` e `railway.json`.
 
+## ChainFX Developers API
+
+ChainFX posiciona o gateway como **Digital FX Payments Infrastructure**:
+
+```text
+PIX -> ChainFX API -> USDT na wallet
+USDT -> ChainFX API -> PIX BRL na conta
+```
+
+### Status tecnico
+
+Implementado neste repositorio:
+
+- Fase 1: API REST, webhooks basicos, sandbox operacional e documentacao inicial.
+- Fase 2: Developer Dashboard, API keys, logs operacionais e retry de webhook.
+- Fase 3: SDK Node, SDK Python, OpenAPI e exemplos de integracao.
+
+Planejado para integracao futura:
+
+- Fase 4: n8n, Zapier, Make, MCP, OpenAI Agents e exemplos para agentes IA.
+- Fase 5: expansao de assets, paises e rails adicionais.
+
+Nao faz parte do escopo atual:
+
+- Bridge entre redes.
+- Pool, AMM, DEX, LP ou yield.
+- Custodia multi-chain complexa fora do fluxo PIX <> stablecoin.
+
+### API REST
+
+Endpoints principais implementados:
+
+- `GET /rates`
+- `POST /quote`
+- `POST /buy`
+- `POST /sell`
+- `GET /order/{id}`
+- `POST /webhooks/test`
+- `POST /webhooks/retry`
+- `GET /developers/dashboard`
+- `GET /developers/logs`
+- `GET /developers/api-keys`
+- `GET /openapi.json`
+
+### Autenticacao
+
+```http
+Authorization: Bearer sk_live_xxx
+```
+
+Modelo de keys:
+
+- Public test: `pk_test_xxx`
+- Secret test: `sk_test_xxx`
+- Public live: `pk_live_xxx`
+- Secret live: `sk_live_xxx`
+
+As chamadas server-to-server usam secret key no header `Authorization`. Public keys ficam reservadas para futuras experiencias client-side ou identificacao publica.
+
+### Webhooks
+
+Eventos documentados:
+
+- `payment.created`
+- `payment.completed`
+- `payment.failed`
+- `order.confirmed`
+- `crypto.sent`
+- `crypto.confirmed`
+- `order.failed`
+
+Payload padrao:
+
+```json
+{
+  "event": "payment.completed",
+  "orderId": "ord_123",
+  "status": "paid",
+  "asset": "USDT",
+  "amount": "96.52",
+  "timestamp": "2026-07-04T00:00:00Z"
+}
+```
+
+Retry tecnico:
+
+- `POST /webhooks/retry` reconstrui o payload de uma ordem existente.
+- Se `targetUrl` for informado, o gateway faz um `POST` real para a URL.
+- A entrega inclui `X-ChainFX-Event` e `X-ChainFX-Signature`.
+
+### Sandbox
+
+O ambiente sandbox fica separado conceitualmente em:
+
+```text
+https://sandbox-api.chainfx.com
+```
+
+No desenvolvimento local, use:
+
+```text
+http://localhost:8080
+```
+
+Recursos previstos/implementados no modo sandbox:
+
+- PIX fake.
+- QR fake.
+- wallet fake.
+- webhooks simulados.
+- ordens de teste.
+- API keys test.
+
+### Developer Dashboard
+
+Rotas operacionais:
+
+- `/developers`
+- `/developers/dashboard`
+- `/developers/logs`
+- `/developers/api-keys`
+
+O dashboard mostra API keys mascaradas, logs recentes de `order_events` e `buy_order_events`, e instrui o retry de webhook.
+
+### Artefatos da Fase 3
+
+- Node SDK: `sdk/node`
+- Python SDK: `sdk/python`
+- OpenAPI estatico: `docs/openapi/chainfx.openapi.json`
+- Exemplos Node: `examples/node`
+- Exemplos Python: `examples/python`
+
+### Exemplo Node
+
+```js
+import { ChainFX } from "./sdk/node/index.js";
+
+const chainfx = new ChainFX({
+  apiKey: process.env.CHAINFX_API_KEY,
+  baseUrl: process.env.CHAINFX_API_BASE_URL || "https://sandbox-api.chainfx.com"
+});
+
+const order = await chainfx.buy({
+  fiat: "BRL",
+  asset: "USDT",
+  amount: 500,
+  wallet: "0x000000000000000000000000000000000000dEaD"
+});
+```
+
+### Exemplo Python
+
+```python
+from chainfx import ChainFX
+
+chainfx = ChainFX(api_key="sk_test_chainfx_local", base_url="http://localhost:8080")
+quote = chainfx.quote(side="buy", fiat="BRL", asset="USDT", amount=500)
+```
+
+### Roadmap futuro
+
+Fase 4 sera integrada futuramente com foco em automacao e IA:
+
+- MCP server.
+- OpenAI Agents examples.
+- LangGraph tool examples.
+- n8n node.
+- Zapier app.
+- Make integration.
+
+Fase 5 sera integrada futuramente com foco em expansao operacional:
+
+- mais assets alem de USDT;
+- mais paises;
+- mais rails locais;
+- limites e compliance por mercado;
+- SDKs adicionais como Go e PHP.
+
 ## Segurança de Custódia com EIP-7702
 
 O signer Go inclui uma camada opcional de proteção de custódia baseada em EIP-7702. O objetivo não é executar arbitragem nem alterar o fluxo PIX, mas proteger a hot wallet contra delegações inesperadas de conta EOA.
