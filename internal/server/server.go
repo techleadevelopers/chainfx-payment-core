@@ -139,6 +139,18 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		Phone             string  `json:"phone"`
 		Email             string  `json:"email"`
 		CustomerEmail     string  `json:"customerEmail"`
+		CustomerName      string  `json:"customerName"`
+		Name              string  `json:"name"`
+		BirthDate         string  `json:"birthDate"`
+		Customer          struct {
+			Name      string         `json:"name"`
+			Email     string         `json:"email"`
+			CPF       string         `json:"cpf"`
+			Phone     string         `json:"phone"`
+			BirthDate string         `json:"birthDate"`
+			Address   map[string]any `json:"address"`
+		} `json:"customer"`
+		AddressPayload map[string]any `json:"addressPayload"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invÃ¡lido"})
@@ -181,15 +193,26 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	totalFiat := amountFiat + fee
 	cryptoAmount := payout / rate
 	buyID := database.NewID()
-	paymentPayload, err := s.createPaymentIntent(r.Context(), buyID, totalFiat, fiatCurrency, paymentMethod)
+	customerInput := paymentCustomerInput{
+		Name:      firstNonEmpty(req.Customer.Name, req.CustomerName, req.Name),
+		Email:     firstNonEmpty(req.Customer.Email, req.Email, req.CustomerEmail),
+		CPF:       firstNonEmpty(req.Customer.CPF, req.PixCpf, req.CPF),
+		Phone:     firstNonEmpty(req.Customer.Phone, req.PixPhone, req.Phone),
+		BirthDate: firstNonEmpty(req.Customer.BirthDate, req.BirthDate),
+		Address:   firstNonNilMap(req.Customer.Address, req.AddressPayload),
+	}
+	paymentPayload, err := s.createPaymentIntent(r.Context(), buyID, totalFiat, fiatCurrency, paymentMethod, customerInput)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
 	customerAudit := buildCustomerAudit(s.cfg.LGPDSecret,
-		firstNonEmpty(req.PixCpf, req.CPF),
-		firstNonEmpty(req.PixPhone, req.Phone),
-		firstNonEmpty(req.Email, req.CustomerEmail),
+		customerInput.CPF,
+		customerInput.Phone,
+		customerInput.Email,
+		customerInput.Name,
+		customerInput.BirthDate,
+		customerInput.Address,
 	)
 	if len(customerAudit) > 0 {
 		paymentPayload["customer"] = customerAudit
@@ -225,6 +248,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		"rate": rate, "cryptoAmount": cryptoAmount, "asset": asset, "network": deliveryNetwork, "destAddress": buy.DestAddress,
 		"feePolicy": s.feePolicy(fiatCurrency, rate),
 		"pixKey":    paymentPayload["pixKey"], "qrCodeUrl": paymentPayload["qrCodeUrl"], "payment": paymentPayload,
+		"orderUrl":  fmt.Sprintf("/order/%s?accessToken=%s", buy.ID, buy.AccessToken),
 		"statusUrl": fmt.Sprintf("/api/buy/%s?accessToken=%s", buy.ID, buy.AccessToken),
 		"streamUrl": fmt.Sprintf("/api/buy/%s/stream?accessToken=%s", buy.ID, buy.AccessToken),
 	})
@@ -416,9 +440,12 @@ func (s *Server) handleChainFXBuy(w http.ResponseWriter, r *http.Request) {
 		Wallet        string  `json:"wallet"`
 		PaymentMethod string  `json:"paymentMethod"`
 		Customer      struct {
-			CPF   string `json:"cpf"`
-			Phone string `json:"phone"`
-			Email string `json:"email"`
+			Name      string         `json:"name"`
+			CPF       string         `json:"cpf"`
+			Phone     string         `json:"phone"`
+			Email     string         `json:"email"`
+			BirthDate string         `json:"birthDate"`
+			Address   map[string]any `json:"address"`
 		} `json:"customer"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
@@ -430,14 +457,25 @@ func (s *Server) handleChainFXBuy(w http.ResponseWriter, r *http.Request) {
 		wallet = chainFXFakeWallet()
 	}
 	payload := map[string]any{
-		"amountFiat":    req.Amount,
-		"fiatCurrency":  defaultString(req.Fiat, "BRL"),
-		"paymentMethod": defaultString(req.PaymentMethod, "pix"),
-		"asset":         defaultString(req.Asset, "USDT"),
-		"address":       wallet,
-		"pixCpf":        req.Customer.CPF,
-		"pixPhone":      req.Customer.Phone,
-		"email":         req.Customer.Email,
+		"amountFiat":     req.Amount,
+		"fiatCurrency":   defaultString(req.Fiat, "BRL"),
+		"paymentMethod":  defaultString(req.PaymentMethod, "pix"),
+		"asset":          defaultString(req.Asset, "USDT"),
+		"address":        wallet,
+		"pixCpf":         req.Customer.CPF,
+		"pixPhone":       req.Customer.Phone,
+		"email":          req.Customer.Email,
+		"customerName":   req.Customer.Name,
+		"birthDate":      req.Customer.BirthDate,
+		"addressPayload": req.Customer.Address,
+		"customer": map[string]any{
+			"name":      req.Customer.Name,
+			"email":     req.Customer.Email,
+			"cpf":       req.Customer.CPF,
+			"phone":     req.Customer.Phone,
+			"birthDate": req.Customer.BirthDate,
+			"address":   req.Customer.Address,
+		},
 	}
 	s.handleCreateBuy(w, cloneJSONRequest(r, payload))
 }
@@ -1812,7 +1850,16 @@ func normalizePaymentRail(currency, method string, amountFiat, amountBRL, amount
 	}
 }
 
-func (s *Server) createPaymentIntent(ctx context.Context, buyID string, amountFiat float64, fiatCurrency, paymentMethod string) (map[string]any, error) {
+type paymentCustomerInput struct {
+	Name      string
+	Email     string
+	CPF       string
+	Phone     string
+	BirthDate string
+	Address   map[string]any
+}
+
+func (s *Server) createPaymentIntent(ctx context.Context, buyID string, amountFiat float64, fiatCurrency, paymentMethod string, customer paymentCustomerInput) (map[string]any, error) {
 	if paymentMethod == "stripe" {
 		return map[string]any{
 			"provider":     "stripe",
@@ -1834,7 +1881,7 @@ func (s *Server) createPaymentIntent(ctx context.Context, buyID string, amountFi
 	}
 	payload := map[string]any{
 		"reference_id": buyID,
-		"customer":     map[string]any{"name": "Swappy Customer"},
+		"customer":     buildPagBankCustomer(customer),
 		"qr_codes": []map[string]any{{
 			"amount": map[string]any{"value": int64(math.Round(amountFiat * 100))},
 		}},
@@ -1864,7 +1911,87 @@ func (s *Server) createPaymentIntent(ctx context.Context, buyID string, amountFi
 	provider["provider"] = "pix"
 	provider["buyId"] = buyID
 	provider["providerStatus"] = resp.StatusCode
+	if customer.Name != "" || customer.Email != "" || customer.CPF != "" || customer.Phone != "" || customer.BirthDate != "" || len(customer.Address) > 0 {
+		provider["customerSubmitted"] = buildCustomerAudit(s.cfg.LGPDSecret, customer.CPF, customer.Phone, customer.Email, customer.Name, customer.BirthDate, customer.Address)
+	}
 	return provider, nil
+}
+
+func buildPagBankCustomer(customer paymentCustomerInput) map[string]any {
+	payload := map[string]any{
+		"name": defaultString(customer.Name, "Swappy Customer"),
+	}
+	if customer.Email != "" {
+		payload["email"] = customer.Email
+	}
+	if customer.CPF != "" {
+		payload["tax_id"] = onlyDigits(customer.CPF)
+	}
+	if customer.BirthDate != "" {
+		payload["birth_date"] = customer.BirthDate
+	}
+	if customer.Phone != "" {
+		digits := onlyDigits(customer.Phone)
+		if len(digits) >= 10 {
+			area := digits[:2]
+			number := digits[2:]
+			payload["phones"] = []map[string]any{{
+				"country": "55",
+				"area":    area,
+				"number":  number,
+				"type":    "MOBILE",
+			}}
+		}
+	}
+	if len(customer.Address) > 0 {
+		payload["address"] = normalizePagBankAddress(customer.Address)
+	}
+	return payload
+}
+
+func normalizePagBankAddress(address map[string]any) map[string]any {
+	if len(address) == 0 {
+		return nil
+	}
+	out := map[string]any{}
+	copyAddressField(out, address, "street", "street", "line1", "address")
+	copyAddressField(out, address, "number", "number")
+	copyAddressField(out, address, "complement", "complement", "line2")
+	copyAddressField(out, address, "locality", "locality", "district", "neighborhood")
+	copyAddressField(out, address, "city", "city")
+	copyAddressField(out, address, "region_code", "region_code", "state")
+	copyAddressField(out, address, "country", "country")
+	if postal := firstMapString(address, "postal_code", "postalCode", "zip", "zipcode"); postal != "" {
+		out["postal_code"] = onlyDigits(postal)
+	}
+	return out
+}
+
+func copyAddressField(out, in map[string]any, target string, keys ...string) {
+	if value := firstMapString(in, keys...); value != "" {
+		out[target] = value
+	}
+}
+
+func firstMapString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if raw, ok := values[key]; ok {
+			if text := strings.TrimSpace(fmt.Sprint(raw)); text != "" && text != "<nil>" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func onlyDigits(value string) string {
+	var builder strings.Builder
+	for _, ch := range value {
+		if ch >= '0' && ch <= '9' {
+			builder.WriteRune(ch)
+		}
+	}
+	return builder.String()
 }
 
 func firstNonEmpty(values ...string) string {
@@ -1874,6 +2001,15 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonNilMap(values ...map[string]any) map[string]any {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
 }
 
 func nestedString(root map[string]any, keys ...string) string {
@@ -1891,7 +2027,7 @@ func nestedString(root map[string]any, keys ...string) string {
 	return ""
 }
 
-func buildCustomerAudit(secret, cpf, phone, email string) map[string]any {
+func buildCustomerAudit(secret, cpf, phone, email, name, birthDate string, address map[string]any) map[string]any {
 	customer := make(map[string]any)
 	if hash := privacy.Hash(cpf, secret); hash != "" {
 		customer["cpfHash"] = hash
@@ -1901,6 +2037,18 @@ func buildCustomerAudit(secret, cpf, phone, email string) map[string]any {
 	}
 	if hash := privacy.Hash(email, secret); hash != "" {
 		customer["emailHash"] = hash
+	}
+	if hash := privacy.Hash(name, secret); hash != "" {
+		customer["nameHash"] = hash
+	}
+	if hash := privacy.Hash(birthDate, secret); hash != "" {
+		customer["birthDateHash"] = hash
+	}
+	if len(address) > 0 {
+		raw, _ := json.Marshal(address)
+		if hash := privacy.Hash(string(raw), secret); hash != "" {
+			customer["addressHash"] = hash
+		}
 	}
 	return customer
 }
