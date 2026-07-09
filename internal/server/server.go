@@ -207,6 +207,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	}
 	paymentPayload, err := s.createPaymentIntent(r.Context(), buyID, totalFiat, fiatCurrency, paymentMethod, customerInput)
 	if err != nil {
+		slog.Error("Erro ao criar cobranca PIX", "buyId", buyID, "provider", "efi", "error", err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1756,6 +1757,8 @@ func cors(cfg *config.Config, next http.Handler) http.Handler {
 		"http://localhost:5173",
 		"http://127.0.0.1:5173",
 		"https://swapped-cryptocurrensy.vercel.app",
+		"https://www.chainfx.store",
+		"https://chainfx.store",
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
@@ -1970,7 +1973,7 @@ func (s *Server) createEfiPixCharge(ctx context.Context, buyID string, amountFia
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Efí rejeitou cobranca PIX: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("Efí rejeitou cobranca PIX: status %d body %s", resp.StatusCode, compactProviderBody(body))
 	}
 	var provider map[string]any
 	if err := json.Unmarshal(body, &provider); err != nil {
@@ -2020,7 +2023,7 @@ func (s *Server) efiQRCode(ctx context.Context, client *http.Client, token strin
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("Efí rejeitou QR Code Pix: status %d", resp.StatusCode)
+		return nil, fmt.Errorf("Efí rejeitou QR Code Pix: status %d body %s", resp.StatusCode, compactProviderBody(body))
 	}
 	var data map[string]any
 	if err := json.Unmarshal(body, &data); err != nil {
@@ -2207,6 +2210,14 @@ func nestedFloat(root map[string]any, keys ...string) float64 {
 		out, _ := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
 		return out
 	}
+}
+
+func compactProviderBody(body []byte) string {
+	text := strings.Join(strings.Fields(string(body)), " ")
+	if len(text) > 500 {
+		return text[:500]
+	}
+	return text
 }
 
 func onlyDigits(value string) string {
