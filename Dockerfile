@@ -31,7 +31,6 @@ ENV APP_ENV=production
 ENV PORT=8080
 ENV TZ=UTC
 ENV GODEBUG=x509negativeserial=1
-ENV EFI_CERTIFICATE_PATH=/app/secrets/efi-production.p12
 
 EXPOSE 8080
 
