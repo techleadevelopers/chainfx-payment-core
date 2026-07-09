@@ -345,6 +345,133 @@ Como o fluxo de compra por API funciona:
 8. O worker de entrega envia USDT para a wallet informada.
 9. O dev acompanha por `GET /order/{id}?accessToken=...` ou webhooks.
 
+### Provider PIX Efí
+
+O rail PIX de compra usa a API Pix Efí em produção.
+
+Implementado:
+
+- OAuth2 client credentials com certificado mTLS.
+- Criacao de cobranca imediata Efí em `PUT /v2/cob/{txid}`.
+- `txid` deterministico derivado do `buyId`, para reconciliar webhook e pedido.
+- Busca de QR oficial Efí em `GET /v2/loc/{id}/qrcode`.
+- Resposta consolidada com `qrCodeUrl`, `pixCopiaECola`, `pixKey`, `providerPaymentId`, `providerStatus` e `payment`.
+- Estimativa de tarifa Efí por `EFI_PIX_FEE_BPS`, padrao `119` (1,19%).
+- Suporte a certificado `.p12` por arquivo ou por variavel base64.
+- Readiness `/readyz` valida se o certificado Efí carregou.
+
+Variaveis Efí:
+
+```env
+EFI_CLIENT_ID=...
+EFI_CLIENT_SECRET=...
+EFI_PIX_KEY=...
+EFI_API_BASE_URL=https://pix.api.efipay.com.br
+EFI_PIX_FEE_BPS=119
+GODEBUG=x509negativeserial=1
+```
+
+Opcao recomendada para cloud, sem depender de volume:
+
+```env
+EFI_CERTIFICATE_P12_BASE64=...
+EFI_CERTIFICATE_PATH=
+EFI_CERTIFICATE_KEY_PATH=
+EFI_CERTIFICATE_PASSWORD=
+```
+
+Opcao por arquivo/volume:
+
+```env
+EFI_CERTIFICATE_PATH=/app/secrets/efi-production.p12
+EFI_CERTIFICATE_KEY_PATH=
+EFI_CERTIFICATE_PASSWORD=
+EFI_CERTIFICATE_P12_BASE64=
+```
+
+Para gerar o base64 localmente no PowerShell:
+
+```powershell
+[Convert]::ToBase64String(
+  [IO.File]::ReadAllBytes("C:\Users\Paulo\Desktop\payment-gateway\secrets\efi-production.p12")
+) | Set-Content -NoNewline "C:\Users\Paulo\Desktop\payment-gateway\secrets\efi-production.p12.b64"
+```
+
+Cole o conteudo de `secrets\efi-production.p12.b64` em `EFI_CERTIFICATE_P12_BASE64` no provedor cloud. Nao versionar `.p12`, `.pem`, `.key`, `.b64` nem secrets.
+
+Verificacao de readiness:
+
+```http
+GET /readyz
+```
+
+Campos esperados:
+
+```json
+{
+  "ok": true,
+  "pix": true,
+  "efi_cert_source": "base64",
+  "efi_certificate": true
+}
+```
+
+`efi_cert_source` pode ser `base64`, `file` ou `missing`.
+
+### Teste manual de compra PIX Efí
+
+Use uma URL de backend do seu ambiente. Nao coloque a URL real de producao em exemplos publicos.
+
+```powershell
+$baseUrl = "https://api.example.com"
+
+$body = @{
+  amountBRL = 10
+  fiatCurrency = "BRL"
+  paymentMethod = "pix"
+  asset = "USDT"
+  address = "0x1111111111111111111111111111111111111111"
+  pixCpf = "12345678909"
+  pixPhone = "11999999999"
+  customer = @{
+    name = "Teste ChainFX"
+    email = "teste@example.com"
+    cpf = "12345678909"
+    phone = "11999999999"
+  }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod `
+  -Uri "$baseUrl/api/buy" `
+  -Method POST `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Resposta esperada, resumida:
+
+```text
+accessToken   : ...
+amountFiat    : 10.5
+asset         : USDT
+buyId         : ...
+cryptoAmount  : ...
+destAddress   : 0x1111111111111111111111111111111111111111
+feeFiat       : 0.5
+fiatCurrency  : BRL
+network       : BSC
+paymentMethod : pix
+payment       : provider=efi, providerStatus=201, txid=..., pixCopiaECola=000201..., qrCodeUrl=data:image/png;base64,...
+pixKey        : ...
+qrCodeUrl     : data:image/png;base64,...
+rate          : ...
+status        : aguardando_pix
+subtotalFiat  : 10
+totalFiat     : 10.5
+```
+
+Esse teste cria uma cobranca PIX real no ambiente configurado. A cobranca so movimenta dinheiro se for paga.
+
 Campos de comprador aceitos hoje em `/buy`:
 
 - `customer.name`
