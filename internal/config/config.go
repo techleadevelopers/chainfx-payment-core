@@ -36,6 +36,8 @@ type Config struct {
 	ChainFXLivePublicKeys  string
 	ChainFXTestPublicKeys  string
 	ChainFXRequireAPIKey   bool
+	AdminBootstrapEmail    string
+	AdminBootstrapPassword string
 
 	// Regras de Limite e Fraude
 	PixMaxOrdersPer24h     int
@@ -115,6 +117,8 @@ func LoadConfig() *Config {
 		ChainFXLivePublicKeys:  getEnv("CHAINFX_LIVE_PUBLIC_KEYS", ""),
 		ChainFXTestPublicKeys:  getEnv("CHAINFX_TEST_PUBLIC_KEYS", "pk_test_chainfx_local"),
 		ChainFXRequireAPIKey:   getEnvAsBool("CHAINFX_REQUIRE_API_KEY", false),
+		AdminBootstrapEmail:    getEnv("ADMIN_BOOTSTRAP_EMAIL", ""),
+		AdminBootstrapPassword: getEnv("ADMIN_BOOTSTRAP_PASSWORD", ""),
 
 		PixMaxOrdersPer24h:     getEnvAsInt("PIX_MAX_ORDERS_PER_24H", 5),
 		PixMaxBrlPer24h:        getEnvAsFloat("PIX_MAX_BRL_PER_24H", 20000.0),
