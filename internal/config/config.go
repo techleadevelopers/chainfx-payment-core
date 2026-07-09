@@ -51,6 +51,7 @@ type Config struct {
 	EfiCertificatePath string
 	EfiCertificateKey  string
 	EfiCertificatePass string
+	EfiCertificateP12  string
 	EfiPixFeeBps       int
 	PixWebhookSecret   string
 
@@ -127,6 +128,7 @@ func LoadConfig() *Config {
 		EfiCertificatePath: getEnv("EFI_CERTIFICATE_PATH", ""),
 		EfiCertificateKey:  getEnv("EFI_CERTIFICATE_KEY_PATH", ""),
 		EfiCertificatePass: getEnv("EFI_CERTIFICATE_PASSWORD", ""),
+		EfiCertificateP12:  getEnv("EFI_CERTIFICATE_P12_BASE64", ""),
 		EfiPixFeeBps:       getEnvAsInt("EFI_PIX_FEE_BPS", 119),
 		PixWebhookSecret:   getEnv("PIX_WEBHOOK_SECRET", ""),
 
@@ -166,17 +168,19 @@ func (c *Config) ValidateProduction() error {
 		return nil
 	}
 	required := map[string]string{
-		"DATABASE_URL":         c.DatabaseURL,
-		"LGPD_SECRET":          c.LGPDSecret,
-		"WEBHOOK_SECRET":       c.WebhookSecret,
-		"PIX_WEBHOOK_SECRET":   c.PixWebhookSecret,
-		"SIGNER_URL":           c.SignerUrl,
-		"SIGNER_HMAC_SECRET":   c.SignerHmacSecret,
-		"EFI_CLIENT_ID":        c.EfiClientID,
-		"EFI_CLIENT_SECRET":    c.EfiClientSecret,
-		"EFI_PIX_KEY":          c.EfiPixKey,
-		"EFI_CERTIFICATE_PATH": c.EfiCertificatePath,
-		"TREASURY_HOT":         c.TreasuryHot,
+		"DATABASE_URL":       c.DatabaseURL,
+		"LGPD_SECRET":        c.LGPDSecret,
+		"WEBHOOK_SECRET":     c.WebhookSecret,
+		"PIX_WEBHOOK_SECRET": c.PixWebhookSecret,
+		"SIGNER_URL":         c.SignerUrl,
+		"SIGNER_HMAC_SECRET": c.SignerHmacSecret,
+		"EFI_CLIENT_ID":      c.EfiClientID,
+		"EFI_CLIENT_SECRET":  c.EfiClientSecret,
+		"EFI_PIX_KEY":        c.EfiPixKey,
+		"TREASURY_HOT":       c.TreasuryHot,
+	}
+	if strings.TrimSpace(c.EfiCertificatePath) == "" && strings.TrimSpace(c.EfiCertificateP12) == "" {
+		required["EFI_CERTIFICATE_PATH or EFI_CERTIFICATE_P12_BASE64"] = ""
 	}
 	switch strings.ToLower(strings.TrimSpace(c.SignerNetwork)) {
 	case "bsc", "evm":
