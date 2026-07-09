@@ -43,11 +43,16 @@ type Config struct {
 	OrderHoldSecForNewDest int
 	BscDepositTolerancePct float64
 
-	// PagBank
-	PagSeguroApiToken   string
-	PagSeguroApiBaseUrl string
-	PixWebhookSecret    string
-	PixChargeEndpoint   string
+	// Efí Bank Pix
+	EfiClientID        string
+	EfiClientSecret    string
+	EfiPixKey          string
+	EfiApiBaseURL      string
+	EfiCertificatePath string
+	EfiCertificateKey  string
+	EfiCertificatePass string
+	EfiPixFeeBps       int
+	PixWebhookSecret   string
 
 	// Tesouraria / signer / sweep
 	TreasuryHot       string
@@ -115,10 +120,15 @@ func LoadConfig() *Config {
 		OrderHoldSecForNewDest: getEnvAsInt("ORDER_HOLD_SEC_FOR_NEW_DEST", 180),
 		BscDepositTolerancePct: getEnvAsFloat("BSC_DEPOSIT_TOLERANCE_PCT", 0.02),
 
-		PagSeguroApiToken:   getEnv("PAGSEGURO_API_TOKEN", ""),
-		PagSeguroApiBaseUrl: getEnv("PAGSEGURO_API_BASE_URL", "https://api.pagseguro.com"),
-		PixWebhookSecret:    getEnv("PIX_WEBHOOK_SECRET", ""),
-		PixChargeEndpoint:   getEnv("PIX_CHARGE_ENDPOINT", "/orders"),
+		EfiClientID:        getEnv("EFI_CLIENT_ID", ""),
+		EfiClientSecret:    getEnv("EFI_CLIENT_SECRET", ""),
+		EfiPixKey:          getEnv("EFI_PIX_KEY", ""),
+		EfiApiBaseURL:      getEnv("EFI_API_BASE_URL", "https://pix.api.efipay.com.br"),
+		EfiCertificatePath: getEnv("EFI_CERTIFICATE_PATH", ""),
+		EfiCertificateKey:  getEnv("EFI_CERTIFICATE_KEY_PATH", ""),
+		EfiCertificatePass: getEnv("EFI_CERTIFICATE_PASSWORD", ""),
+		EfiPixFeeBps:       getEnvAsInt("EFI_PIX_FEE_BPS", 119),
+		PixWebhookSecret:   getEnv("PIX_WEBHOOK_SECRET", ""),
 
 		TreasuryHot:       getEnv("TREASURY_HOT", ""),
 		TreasuryCold:      getEnv("TREASURY_COLD", ""),
@@ -156,14 +166,17 @@ func (c *Config) ValidateProduction() error {
 		return nil
 	}
 	required := map[string]string{
-		"DATABASE_URL":        c.DatabaseURL,
-		"LGPD_SECRET":         c.LGPDSecret,
-		"WEBHOOK_SECRET":      c.WebhookSecret,
-		"PIX_WEBHOOK_SECRET":  c.PixWebhookSecret,
-		"SIGNER_URL":          c.SignerUrl,
-		"SIGNER_HMAC_SECRET":  c.SignerHmacSecret,
-		"PAGSEGURO_API_TOKEN": c.PagSeguroApiToken,
-		"TREASURY_HOT":        c.TreasuryHot,
+		"DATABASE_URL":         c.DatabaseURL,
+		"LGPD_SECRET":          c.LGPDSecret,
+		"WEBHOOK_SECRET":       c.WebhookSecret,
+		"PIX_WEBHOOK_SECRET":   c.PixWebhookSecret,
+		"SIGNER_URL":           c.SignerUrl,
+		"SIGNER_HMAC_SECRET":   c.SignerHmacSecret,
+		"EFI_CLIENT_ID":        c.EfiClientID,
+		"EFI_CLIENT_SECRET":    c.EfiClientSecret,
+		"EFI_PIX_KEY":          c.EfiPixKey,
+		"EFI_CERTIFICATE_PATH": c.EfiCertificatePath,
+		"TREASURY_HOT":         c.TreasuryHot,
 	}
 	switch strings.ToLower(strings.TrimSpace(c.SignerNetwork)) {
 	case "bsc", "evm":
