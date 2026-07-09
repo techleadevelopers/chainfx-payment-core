@@ -727,15 +727,31 @@ func (db *DB) EnsureBootstrapAdmin(ctx context.Context) error {
 	if email == "" || password == "" {
 		return nil
 	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
 	var exists bool
 	if err := db.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM admin_users WHERE lower(email) = lower($1))`, email).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {
-		return nil
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
+		if _, err := db.SQL.ExecContext(ctx, `
+			UPDATE admin_users
+			SET password_hash = $1,
+			    role = COALESCE(NULLIF(role, ''), 'owner'),
+			    disabled_at = NULL,
+			    updated_at = now()
+			WHERE lower(email) = lower($2)`,
+			string(hash), email); err != nil {
+			return err
+		}
+		_, err := db.SQL.ExecContext(ctx, `
+			UPDATE admin_sessions
+			SET revoked_at = now()
+			WHERE revoked_at IS NULL
+			  AND admin_user_id IN (SELECT id FROM admin_users WHERE lower(email) = lower($1))`,
+			email)
 		return err
 	}
 	_, err = db.SQL.ExecContext(ctx, `
