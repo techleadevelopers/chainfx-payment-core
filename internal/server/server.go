@@ -379,6 +379,8 @@ func (s *Server) handlePrice(w http.ResponseWriter, r *http.Request) {
 		"eur":         s.workers.PriceWorker.GetPrice("EUR"),
 		"usdtbrl":     s.workers.PriceWorker.GetPrice("USDTBRL"),
 		"sellUsdtBrl": s.sellRate(price),
+		"sellWallet":  s.cfg.SellWalletAddress,
+		"sellNetwork": "BEP20",
 		"eurusd":      s.workers.PriceWorker.GetPrice("EURUSD"),
 		"btcusdt":     s.workers.PriceWorker.GetPrice("BTCUSDT"),
 	})
@@ -396,6 +398,8 @@ func (s *Server) handleChainFXRates(w http.ResponseWriter, r *http.Request) {
 		"category":    "Digital FX Payments Infrastructure",
 		"description": "Accept PIX. Deliver digital dollars. Receive stablecoins. Pay out PIX.",
 		"base":        "USDT",
+		"sellWallet":  s.cfg.SellWalletAddress,
+		"sellNetwork": "BEP20",
 		"rates": map[string]float64{
 			"USDT_BRL":      s.workers.PriceWorker.GetPrice("BRL"),
 			"SELL_USDT_BRL": s.sellRate(price),
@@ -595,7 +599,7 @@ func (s *Server) handleChainFXSell(w http.ResponseWriter, r *http.Request) {
 	if amountUSDT <= 0 && req.AmountBRL > 0 {
 		amountUSDT = req.AmountBRL / s.sellRate(marketRate)
 	}
-	depositAddress := firstNonEmpty(req.DepositAddress, req.Wallet)
+	depositAddress := firstNonEmpty(s.cfg.SellWalletAddress, req.DepositAddress, req.Wallet)
 	if depositAddress == "" && auth.Sandbox {
 		depositAddress = chainFXFakeWallet()
 	}
@@ -1221,7 +1225,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var idx *int
-	depositAddress := strings.TrimSpace(req.Address)
+	depositAddress := strings.TrimSpace(firstNonEmpty(s.cfg.SellWalletAddress, req.Address))
 	if depositAddress == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereco BSC de deposito obrigatorio"})
 		return
