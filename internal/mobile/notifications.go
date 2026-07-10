@@ -1,0 +1,63 @@
+package mobile
+
+import "net/http"
+
+// handleListNotifications — GET /api/mobile/notifications
+func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	list, err := mobileDB(s.db).ListNotifications(r.Context(), uid, 50)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notifications": list, "count": len(list)})
+}
+
+// handleMarkNotificationsRead — PUT /api/mobile/notifications/read
+func (s *Server) handleMarkNotificationsRead(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	var req struct {
+		IDs []string `json:"ids"` // empty = mark all
+	}
+	_ = decodeJSON(r, &req)
+	if err := mobileDB(s.db).MarkNotificationsRead(r.Context(), uid, req.IDs); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleDeleteNotification — DELETE /api/mobile/notifications/{id}
+func (s *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	id := r.PathValue("id")
+	if err := mobileDB(s.db).DeleteNotification(r.Context(), uid, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleRegisterPushToken — POST /api/mobile/notifications/token
+func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	var req struct {
+		FCMToken   string `json:"fcm_token"`
+		APNSToken  string `json:"apns_token"`
+		DeviceName string `json:"device_name"`
+		DeviceType string `json:"device_type"` // android | ios
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload inválido"})
+		return
+	}
+	if req.FCMToken == "" && req.APNSToken == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fcm_token ou apns_token obrigatório"})
+		return
+	}
+	if err := mobileDB(s.db).UpsertDevice(r.Context(), uid, req.DeviceName, req.DeviceType, req.FCMToken, req.APNSToken); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
