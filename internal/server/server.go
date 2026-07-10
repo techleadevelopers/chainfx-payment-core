@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"bytes"
@@ -2661,4 +2661,3 @@ func (l *rateLimiter) Allow(key string) bool {
 	l.counters[key] = b
 	return b.Count <= l.max
 }
-
