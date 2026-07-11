@@ -80,6 +80,8 @@ type Config struct {
 	SignerHmacSecret  string
 	BscRpcUrls        string
 	BscUsdtContract   string
+	PolygonRpcUrls    string
+	PolygonUsdtContract string
 	EnableSweepWorker bool
 	EnableSweepStub   bool
 	SweepBatchUsdtMin float64
@@ -106,13 +108,17 @@ type Config struct {
 	LGPDSecret string
 
 	// Webhooks
-    WebhooksEnabled    bool
-    WebhooksMaxRetries int
+	WebhooksEnabled    bool
+	WebhooksMaxRetries int
 
 	// OpenAI / AI Agents
 	OpenAIAPIKey  string
 	OpenAIModel   string
 	OpenAIBaseURL string
+
+	// Capability provider adapters
+	CapabilityOCRURL    string
+	CapabilityOCRAPIKey string
 }
 
 // LoadConfig é o cara que lê o .env e joga para dentro da estrutura acima
@@ -187,6 +193,8 @@ func LoadConfig() *Config {
 		SignerHmacSecret:  getEnv("SIGNER_HMAC_SECRET", ""),
 		BscRpcUrls:        getBscRpcUrls(),
 		BscUsdtContract:   getEnv("BSC_USDT_CONTRACT", getEnv("BSC_TOKEN_CONTRACT", "")),
+		PolygonRpcUrls:    getPolygonRpcUrls(),
+		PolygonUsdtContract: getEnv("POLYGON_USDT_CONTRACT", getEnv("POLYGON_TOKEN_CONTRACT", "")),
 		EnableSweepWorker: getEnvAsBool("ENABLE_SWEEP_WORKER", false),
 		EnableSweepStub:   getEnvAsBool("ENABLE_SWEEP_STUB", false),
 		SweepBatchUsdtMin: getEnvAsFloat("SWEEP_BATCH_USDT_MIN", 0),
@@ -194,26 +202,27 @@ func LoadConfig() *Config {
 		SweepFrequencyMs:  getEnvAsInt("SWEEP_FREQUENCY_MS", 80800),
 		BscGasReserveBNB:  getEnvAsFloat("BSC_GAS_RESERVE_BNB", 0.003),
 
-		SMTPHost:       getEnv("SMTP_HOST", ""),
-		SMTPPort:       getEnvAsInt("SMTP_PORT", 587),
-		SMTPUser:       getEnv("SMTP_USER", ""),
-		SMTPPass:       getEnv("SMTP_PASS", ""),
-		SMTPSecure:     getEnvAsBool("SMTP_SECURE", false),
-		SMTPFromEmail:  getEnv("SMTP_FROM_EMAIL", ""),
-		SMTPFromName:   getEnv("SMTP_FROM_NAME", "ChainFX"),
-		OpsEmail:       getEnv("OPS_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
-		EmailBrandName: getEnv("EMAIL_BRAND_NAME", "ChainFX"),
-		EmailLogoURL:   getEnv("EMAIL_LOGO_URL", "https://res.cloudinary.com/limpeja/image/upload/v1783623705/Green_Modern_Marketing_Logo-removebg-preview_1_yivrrc.png"),
-		EmailSiteURL:   strings.TrimRight(getEnv("EMAIL_SITE_URL", "https://www.chainfx.store"), "/"),
-		EmailAddress:   getEnv("EMAIL_COMPANY_ADDRESS", "ChainFX Payments"),
-		SupportEmail:   getEnv("SUPPORT_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
-		LGPDSecret:     getEnv("LGPD_SECRET", ""),
-		WebhooksEnabled:    getEnvAsBool("WEBHOOKS_ENABLED", true),
-		WebhooksMaxRetries: getEnvAsInt("WEBHOOKS_MAX_RETRIES", 5),
-		OpenAIAPIKey:  getEnv("OPENAI_API_KEY", ""),
-		OpenAIModel:   getEnv("OPENAI_MODEL", "gpt-5.5"),
-		OpenAIBaseURL: strings.TrimRight(getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/",
-),
+		SMTPHost:            getEnv("SMTP_HOST", ""),
+		SMTPPort:            getEnvAsInt("SMTP_PORT", 587),
+		SMTPUser:            getEnv("SMTP_USER", ""),
+		SMTPPass:            getEnv("SMTP_PASS", ""),
+		SMTPSecure:          getEnvAsBool("SMTP_SECURE", false),
+		SMTPFromEmail:       getEnv("SMTP_FROM_EMAIL", ""),
+		SMTPFromName:        getEnv("SMTP_FROM_NAME", "ChainFX"),
+		OpsEmail:            getEnv("OPS_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
+		EmailBrandName:      getEnv("EMAIL_BRAND_NAME", "ChainFX"),
+		EmailLogoURL:        getEnv("EMAIL_LOGO_URL", "https://res.cloudinary.com/limpeja/image/upload/v1783623705/Green_Modern_Marketing_Logo-removebg-preview_1_yivrrc.png"),
+		EmailSiteURL:        strings.TrimRight(getEnv("EMAIL_SITE_URL", "https://www.chainfx.store"), "/"),
+		EmailAddress:        getEnv("EMAIL_COMPANY_ADDRESS", "ChainFX Payments"),
+		SupportEmail:        getEnv("SUPPORT_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
+		LGPDSecret:          getEnv("LGPD_SECRET", ""),
+		WebhooksEnabled:     getEnvAsBool("WEBHOOKS_ENABLED", true),
+		WebhooksMaxRetries:  getEnvAsInt("WEBHOOKS_MAX_RETRIES", 5),
+		OpenAIAPIKey:        getEnv("OPENAI_API_KEY", ""),
+		OpenAIModel:         getEnv("OPENAI_MODEL", "gpt-5.5"),
+		OpenAIBaseURL:       strings.TrimRight(getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
+		CapabilityOCRURL:    strings.TrimRight(getEnv("CAPABILITY_OCR_URL", ""), "/"),
+		CapabilityOCRAPIKey: getEnv("CAPABILITY_OCR_API_KEY", ""),
 	}
 }
 
