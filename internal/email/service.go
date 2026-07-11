@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/smtp"
+	"net/textproto"
 	"strings"
+	"time"
 
 	"payment-gateway/internal/config"
 )
@@ -15,9 +17,11 @@ type Service struct {
 }
 
 type Message struct {
-	To      string
-	Subject string
-	Body    string
+	To       string
+	Subject  string
+	Body     string
+	TextBody string
+	HTMLBody string
 }
 
 func NewService(cfg *config.Config) *Service {
@@ -43,22 +47,14 @@ func (s *Service) Send(msg Message) error {
 		from = fmt.Sprintf("%s <%s>", fromName, s.cfg.SMTPFromEmail)
 	}
 
-	raw := strings.Join([]string{
-		"From: " + from,
-		"To: " + msg.To,
-		"Subject: " + msg.Subject,
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
-		"",
-		msg.Body,
-	}, "\r\n")
+	raw := s.renderMIME(from, msg)
 
 	addr := fmt.Sprintf("%s:%d", s.cfg.SMTPHost, s.cfg.SMTPPort)
 	auth := smtp.PlainAuth("", s.cfg.SMTPUser, s.cfg.SMTPPass, s.cfg.SMTPHost)
 	if s.cfg.SMTPSecure {
-		return s.sendStartTLS(addr, auth, []byte(raw), msg.To)
+		return s.sendStartTLS(addr, auth, raw, msg.To)
 	}
-	return smtp.SendMail(addr, auth, s.cfg.SMTPFromEmail, []string{msg.To}, []byte(raw))
+	return smtp.SendMail(addr, auth, s.cfg.SMTPFromEmail, []string{msg.To}, raw)
 }
 
 func (s *Service) NotifyOps(subject, body string) {
@@ -68,6 +64,68 @@ func (s *Service) NotifyOps(subject, body string) {
 	if err := s.Send(Message{To: s.cfg.OpsEmail, Subject: subject, Body: body}); err != nil {
 		slog.Warn("Falha ao enviar email operacional", "error", err)
 	}
+}
+
+func (s *Service) SendBuyCompleted(to string, receipt Receipt) error {
+	receipt.Kind = "buy"
+	receipt.Brand = s.brand()
+	return s.Send(BuildReceiptMessage(to, "Compra concluida na ChainFX", receipt))
+}
+
+func (s *Service) SendSellCompleted(to string, receipt Receipt) error {
+	receipt.Kind = "sell"
+	receipt.Brand = s.brand()
+	return s.Send(BuildReceiptMessage(to, "Venda concluida na ChainFX", receipt))
+}
+
+func (s *Service) SendMarketing(to string, campaign MarketingCampaign) error {
+	campaign.Brand = s.brand()
+	return s.Send(BuildMarketingMessage(to, campaign))
+}
+
+func (s *Service) brand() Brand {
+	return Brand{
+		Name:         firstNonEmpty(s.cfg.EmailBrandName, "ChainFX"),
+		LogoURL:      firstNonEmpty(s.cfg.EmailLogoURL, "https://www.chainfx.store/logo.png"),
+		SiteURL:      firstNonEmpty(s.cfg.EmailSiteURL, "https://www.chainfx.store"),
+		Address:      firstNonEmpty(s.cfg.EmailAddress, "ChainFX Payments"),
+		SupportEmail: firstNonEmpty(s.cfg.SupportEmail, s.cfg.SMTPFromEmail),
+		Year:         time.Now().Year(),
+	}
+}
+
+func (s *Service) renderMIME(from string, msg Message) []byte {
+	textBody := firstNonEmpty(msg.TextBody, msg.Body)
+	htmlBody := strings.TrimSpace(msg.HTMLBody)
+	headers := []string{
+		"From: " + from,
+		"To: " + msg.To,
+		"Subject: " + sanitizeHeader(msg.Subject),
+		"MIME-Version: 1.0",
+	}
+	if htmlBody == "" {
+		headers = append(headers, "Content-Type: text/plain; charset=UTF-8")
+		return []byte(strings.Join(append(headers, "", textBody), "\r\n"))
+	}
+	boundary := fmt.Sprintf("chainfx-%d", time.Now().UnixNano())
+	headers = append(headers, "Content-Type: multipart/alternative; boundary="+boundary)
+	parts := []string{
+		strings.Join(headers, "\r\n"),
+		"",
+		"--" + boundary,
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		textBody,
+		"--" + boundary,
+		"Content-Type: text/html; charset=UTF-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		htmlBody,
+		"--" + boundary + "--",
+		"",
+	}
+	return []byte(strings.Join(parts, "\r\n"))
 }
 
 func (s *Service) sendStartTLS(addr string, auth smtp.Auth, raw []byte, to string) error {
@@ -101,4 +159,17 @@ func (s *Service) sendStartTLS(addr string, auth smtp.Auth, raw []byte, to strin
 		return err
 	}
 	return w.Close()
+}
+
+func sanitizeHeader(value string) string {
+	return textproto.TrimString(strings.NewReplacer("\r", "", "\n", "").Replace(value))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
