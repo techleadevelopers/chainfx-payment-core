@@ -152,7 +152,7 @@ type Sweep struct {
 
 func ConnectPostgres(cfg *config.Config) (*DB, error) {
 	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL nÃ£o configurado")
+		return nil, fmt.Errorf("DATABASE_URL não configurado")
 	}
 
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
@@ -186,7 +186,7 @@ func ConnectPostgres(cfg *config.Config) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	log.Println("ConexÃ£o com PostgreSQL estabelecida com sucesso!")
+	log.Println("Conexão com PostgreSQL estabelecida com sucesso!")
 	return wrapped, nil
 }
 
