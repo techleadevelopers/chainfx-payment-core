@@ -123,6 +123,7 @@ func (bw *BuySendWorker) processBuyOnchainSend(event Event) {
 				slog.Error("Erro ao persistir envio BUY simulado", "buy_order_id", orderID, "error", err)
 				return
 			}
+			bw.bus.Publish(Event{Type: "buy.sent", OrderID: orderID, Payload: map[string]any{"txHash": txHash}})
 			slog.Warn("Signer nao configurado; envio BUY simulado", "buy_order_id", orderID, "tx_hash", txHash)
 			return
 		}
@@ -136,7 +137,7 @@ func (bw *BuySendWorker) processBuyOnchainSend(event Event) {
 	if network == "" || network == "EVM" || network == "BINANCE" || network == "BEP20" {
 		network = "BSC"
 	}
-	
+
 	payload := map[string]any{
 		"to":             buy.DestAddress,
 		"amount":         fmt.Sprintf("%.8f", buy.CryptoAmount),
@@ -184,7 +185,7 @@ func (bw *BuySendWorker) processBuyOnchainSend(event Event) {
 		slog.Error("Erro ao decodificar resposta do signer", "buy_order_id", orderID, "error", err)
 		signed.TxHash = "signer-accepted-" + orderID // fallback
 	}
-	
+
 	if signed.TxHash == "" {
 		signed.TxHash = "signer-accepted-" + orderID
 	}
