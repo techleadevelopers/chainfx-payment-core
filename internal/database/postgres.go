@@ -286,6 +286,30 @@ func (db *DB) GetPendingOrders(ctx context.Context) ([]models.Order, error) {
 	return out, rows.Err()
 }
 
+func (db *DB) GetPendingOrdersByNetwork(ctx context.Context, network string) ([]models.Order, error) {
+	rows, err := db.SQL.QueryContext(ctx, `
+		SELECT o.id, COALESCE(o.access_token, ''), o.status, o.amount_brl, o.btc_amount, COALESCE(o.fee_brl,0), COALESCE(o.payout_brl,0), o.address, o.asset, o.network,
+		       o.rate_locked, o.rate_lock_expires_at, o.created_at, COALESCE(o.updated_at, o.created_at), o.tx_hash, o.error,
+		       o.deposit_tx, o.deposit_amount, op.pix_cpf_enc, op.pix_phone_enc, o.derivation_index
+		FROM orders o
+		LEFT JOIN order_private op ON op.order_id = o.id
+		WHERE o.status IN ('aguardando_deposito','aguardando_validacao')
+		  AND upper(o.network) = upper($1)`, strings.TrimSpace(network))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Order
+	for rows.Next() {
+		o, err := db.scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *o)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) UpdateOrderStatus(ctx context.Context, id, status string, extra map[string]any) error {
 	txHash, _ := extra["txHash"].(string)
 	errMsg, _ := extra["error"].(string)
@@ -316,6 +340,18 @@ func (db *DB) HasPendingOrderForAddress(ctx context.Context, address string) (bo
 			WHERE lower(address) = lower($1)
 			  AND status IN ('aguardando_deposito','aguardando_validacao','pago','processando_payout')
 		)`, address).Scan(&exists)
+	return exists, err
+}
+
+func (db *DB) HasPendingOrderForAddressNetwork(ctx context.Context, address, network string) (bool, error) {
+	var exists bool
+	err := db.SQL.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM orders
+			WHERE lower(address) = lower($1)
+			  AND upper(network) = upper($2)
+			  AND status IN ('aguardando_deposito','aguardando_validacao','pago','processando_payout')
+		)`, address, strings.TrimSpace(network)).Scan(&exists)
 	return exists, err
 }
 
@@ -1446,6 +1482,8 @@ INSERT INTO agent_supported_assets (symbol, network, contract_address, decimals,
 VALUES
   ('USDT', 'BSC', '0x55d398326f99059fF775485246999027B3197955', 18, 600, 5.00, 'active', true),
   ('USDC', 'BSC', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', 18, 600, 5.00, 'active', true),
+  ('USDT', 'POLYGON', '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', 6, 600, 5.00, 'active', true),
+  ('USDC', 'POLYGON', '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174', 6, 600, 5.00, 'active', true),
   ('BUSD', 'BSC', '0xe9e7cea3dedca5984780bafc599b69add087d56', 18, 600, 5.00, 'legacy', false)
 ON CONFLICT (symbol, network) DO NOTHING;
 
