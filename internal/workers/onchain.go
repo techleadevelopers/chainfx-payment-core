@@ -18,41 +18,65 @@ import (
 	rpcpool "payment-gateway/internal/rpc"
 )
 
-// erc20TransferTopic = keccak256("Transfer(address,address,uint256)")
 var erc20TransferTopic = crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)"))
 
 const (
-	requiredConfirmations = uint64(6)  // 6 blocks ≈ 18 s finality on BSC
-	scanBlockRange        = uint64(50) // blocks per poll tick
-	usdtDecimals          = 18         // BSC USDT decimals
+	bscRequiredConfirmations     = uint64(6)
+	polygonRequiredConfirmations = uint64(128)
+	scanBlockRange               = uint64(50)
 )
 
-// OnchainWorker monitors BSC for USDT deposits to pending sell orders.
+type onchainNetworkConfig struct {
+	Name                  string
+	RPCUrls               string
+	TokenContract         string
+	TokenDecimals         int
+	RequiredConfirmations uint64
+}
+
+// OnchainWorker monitors configured EVM networks for stablecoin deposits to pending sell orders.
 type OnchainWorker struct {
-	bus  *EventBus
-	db   *database.DB
-	cfg  *config.Config
-	pool *rpcpool.Pool
-	dlq  *DeadLetterQueue
+	bus      *EventBus
+	db       *database.DB
+	cfg      *config.Config
+	pools    map[string]*rpcpool.Pool
+	networks []onchainNetworkConfig
+	dlq      *DeadLetterQueue
 }
 
 func NewOnchainWorker(bus *EventBus, db *database.DB, cfg *config.Config) *OnchainWorker {
-	w := &OnchainWorker{bus: bus, db: db, cfg: cfg, dlq: NewDLQ(1000, nil)}
-	if cfg.BscRpcUrls != "" {
-		pool, err := rpcpool.NewPool(cfg.BscRpcUrls)
-		if err != nil {
-			slog.Warn("OnchainWorker: RPC pool init failed", "err", err)
-		} else {
-			w.pool = pool
-		}
+	w := &OnchainWorker{
+		bus:   bus,
+		db:    db,
+		cfg:   cfg,
+		pools: make(map[string]*rpcpool.Pool),
+		dlq:   NewDLQ(1000, nil),
 	}
+
+	for _, network := range []onchainNetworkConfig{
+		{Name: "BSC", RPCUrls: cfg.BscRpcUrls, TokenContract: cfg.BscUsdtContract, TokenDecimals: 18, RequiredConfirmations: bscRequiredConfirmations},
+		{Name: "POLYGON", RPCUrls: cfg.PolygonRpcUrls, TokenContract: cfg.PolygonUsdtContract, TokenDecimals: 6, RequiredConfirmations: polygonRequiredConfirmations},
+	} {
+		if strings.TrimSpace(network.RPCUrls) == "" || strings.TrimSpace(network.TokenContract) == "" {
+			continue
+		}
+		pool, err := rpcpool.NewPool(network.RPCUrls)
+		if err != nil {
+			slog.Warn("OnchainWorker: RPC pool init failed", "network", network.Name, "err", err)
+			continue
+		}
+		w.pools[network.Name] = pool
+		w.networks = append(w.networks, network)
+	}
+
 	return w
 }
 
 func (ow *OnchainWorker) Start(ctx context.Context) {
-	slog.Info("OnchainWorker BSC iniciado")
-	if ow.pool != nil {
-		ow.pool.StartHealthChecks(ctx, 30*time.Second)
+	slog.Info("OnchainWorker iniciado", "networks", len(ow.networks))
+	for network, pool := range ow.pools {
+		slog.Info("OnchainWorker rede habilitada", "network", network)
+		pool.StartHealthChecks(ctx, 30*time.Second)
 	}
 
 	mobilePayout := ow.bus.Subscribe("mobile.payout.requested")
@@ -70,55 +94,55 @@ func (ow *OnchainWorker) Start(ctx context.Context) {
 			}
 			go ow.forwardMobilePayout(ev)
 		case <-ticker.C:
-			ow.poll(ctx)
+			for _, network := range ow.networks {
+				ow.poll(ctx, network)
+			}
 		}
 	}
 }
 
-func (ow *OnchainWorker) poll(ctx context.Context) {
-	if ow.pool == nil || ow.cfg.BscUsdtContract == "" {
-		slog.Debug("OnchainWorker: BSC não configurado, pulando poll")
+func (ow *OnchainWorker) poll(ctx context.Context, network onchainNetworkConfig) {
+	pool := ow.pools[network.Name]
+	if pool == nil || strings.TrimSpace(network.TokenContract) == "" {
+		slog.Debug("OnchainWorker: rede nao configurada, pulando poll", "network", network.Name)
 		return
 	}
 
 	pollCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
-	latestBlock, err := ow.pool.BlockNumber(pollCtx)
+	latestBlock, err := pool.BlockNumber(pollCtx)
 	if err != nil {
-		slog.Warn("OnchainWorker: erro ao buscar bloco", "err", err)
+		slog.Warn("OnchainWorker: erro ao buscar bloco", "network", network.Name, "err", err)
+		return
+	}
+	if latestBlock <= network.RequiredConfirmations {
+		slog.Debug("OnchainWorker: aguardando blocos suficientes", "network", network.Name, "latest", latestBlock)
 		return
 	}
 
-	if latestBlock <= requiredConfirmations {
-		slog.Debug("OnchainWorker: aguardando blocos suficientes", "latest", latestBlock)
-		return
-	}
-	scanHead := latestBlock - requiredConfirmations
-
-	fromBlock := ow.getCursor(pollCtx, scanHead)
+	scanHead := latestBlock - network.RequiredConfirmations
+	fromBlock := ow.getCursor(pollCtx, network.Name, scanHead)
 	if fromBlock >= scanHead {
 		return
 	}
 	toBlock := min64(fromBlock+scanBlockRange, scanHead)
 	if toBlock <= fromBlock {
 		slog.Warn("OnchainWorker: faixa de blocos invalida, pulando poll",
-			"from", fromBlock, "to", toBlock, "latest", latestBlock, "scan_head", scanHead)
+			"network", network.Name, "from", fromBlock, "to", toBlock, "latest", latestBlock, "scan_head", scanHead)
 		return
 	}
 
-	// Fetch pending orders. On error: do NOT advance cursor — we'd miss deposits.
-	pendingOrders, err := ow.db.GetPendingOrders(pollCtx)
+	pendingOrders, err := ow.db.GetPendingOrdersByNetwork(pollCtx, network.Name)
 	if err != nil {
-		slog.Warn("OnchainWorker: erro ao buscar ordens pendentes — cursor não avançado", "err", err)
+		slog.Warn("OnchainWorker: erro ao buscar ordens pendentes; cursor nao avancado", "network", network.Name, "err", err)
 		return
 	}
 	if len(pendingOrders) == 0 {
-		ow.saveCursor(pollCtx, toBlock)
+		ow.saveCursor(pollCtx, network.Name, toBlock)
 		return
 	}
 
-	// Build address (lowercase) → []orderID  (one-to-many: multiple orders can share an address)
 	addrSet := make(map[string][]string, len(pendingOrders))
 	for _, o := range pendingOrders {
 		if o.Address != "" {
@@ -127,30 +151,28 @@ func (ow *OnchainWorker) poll(ctx context.Context) {
 		}
 	}
 	if len(addrSet) == 0 {
-		ow.saveCursor(pollCtx, toBlock)
+		ow.saveCursor(pollCtx, network.Name, toBlock)
 		return
 	}
 
 	query := ethereum.FilterQuery{
 		FromBlock: new(big.Int).SetUint64(fromBlock + 1),
 		ToBlock:   new(big.Int).SetUint64(toBlock),
-		Addresses: []common.Address{common.HexToAddress(ow.cfg.BscUsdtContract)},
+		Addresses: []common.Address{common.HexToAddress(network.TokenContract)},
 		Topics:    [][]common.Hash{{erc20TransferTopic}},
 	}
-	logs, err := ow.pool.FilterLogs(pollCtx, query)
+	logs, err := pool.FilterLogs(pollCtx, query)
 	if err != nil {
-		slog.Warn("OnchainWorker: erro ao filtrar logs — cursor não avançado",
-			"from", fromBlock, "to", toBlock, "err", err)
-		return // do NOT advance cursor on RPC error
+		slog.Warn("OnchainWorker: erro ao filtrar logs; cursor nao avancado",
+			"network", network.Name, "from", fromBlock, "to", toBlock, "err", err)
+		return
 	}
 
 	slog.Debug("OnchainWorker: scan",
-		"blocks", fmt.Sprintf("%d→%d", fromBlock+1, toBlock),
+		"network", network.Name,
+		"blocks", fmt.Sprintf("%d->%d", fromBlock+1, toBlock),
 		"logs", len(logs), "orders", len(pendingOrders))
 
-	// safeToBlock tracks the earliest unconfirmed deposit we've seen.
-	// We must NOT advance cursor past (unconfirmed_block - 1) so we revisit
-	// those blocks once they accumulate enough confirmations.
 	safeToBlock := toBlock
 	for _, log := range logs {
 		if len(log.Topics) < 3 {
@@ -161,53 +183,49 @@ func (ow *OnchainWorker) poll(ctx context.Context) {
 		if !ok {
 			continue
 		}
-		if latestBlock < log.BlockNumber+requiredConfirmations {
-			// This deposit is not yet confirmed — hold cursor at (block - 1)
+		if latestBlock < log.BlockNumber+network.RequiredConfirmations {
 			if log.BlockNumber > 0 && log.BlockNumber-1 < safeToBlock {
 				safeToBlock = log.BlockNumber - 1
 			}
-			slog.Debug("OnchainWorker: depósito aguardando confirmações",
-				"tx", log.TxHash.Hex(), "block", log.BlockNumber,
-				"conf_remaining", (log.BlockNumber+requiredConfirmations)-latestBlock)
+			slog.Debug("OnchainWorker: deposito aguardando confirmacoes",
+				"network", network.Name, "tx", log.TxHash.Hex(), "block", log.BlockNumber,
+				"conf_remaining", (log.BlockNumber+network.RequiredConfirmations)-latestBlock)
 			continue
 		}
 		rawAmount := new(big.Int).SetBytes(log.Data)
 		for _, orderID := range orderIDs {
-			ow.confirmDeposit(ctx, orderID, log.TxHash.Hex(), rawAmount, log.BlockNumber)
+			ow.confirmDeposit(ctx, network, orderID, log.TxHash.Hex(), rawAmount, log.BlockNumber)
 		}
 	}
 
-	// Only advance cursor to the safe boundary
 	if safeToBlock > fromBlock {
-		ow.saveCursor(pollCtx, safeToBlock)
+		ow.saveCursor(pollCtx, network.Name, safeToBlock)
 	}
 }
 
-func (ow *OnchainWorker) confirmDeposit(ctx context.Context, orderID, txHash string, rawAmount *big.Int, blockNum uint64) {
+func (ow *OnchainWorker) confirmDeposit(ctx context.Context, network onchainNetworkConfig, orderID, txHash string, rawAmount *big.Int, blockNum uint64) {
 	cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	order, err := ow.db.GetOrder(cCtx, orderID)
 	if err != nil || order == nil {
-		slog.Warn("OnchainWorker: ordem não encontrada", "order_id", orderID)
+		slog.Warn("OnchainWorker: ordem nao encontrada", "network", network.Name, "order_id", orderID)
 		return
 	}
-	// Idempotency check — skip orders already past deposit-waiting states
 	if order.Status != models.StatusAguardandoDeposito &&
 		order.Status != models.StatusAguardandoValidacao {
 		return
 	}
-
-	// Detect replay: if deposit_tx already matches this txHash, skip
+	if !strings.EqualFold(order.Network, network.Name) {
+		return
+	}
 	if order.DepositTx != nil && *order.DepositTx == txHash {
-		slog.Debug("OnchainWorker: depósito já registrado, ignorando", "tx", txHash)
+		slog.Debug("OnchainWorker: deposito ja registrado, ignorando", "network", network.Name, "tx", txHash)
 		return
 	}
 
-	divisor := new(big.Float).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(usdtDecimals), nil))
-	amountFloat, _ := new(big.Float).Quo(
-		new(big.Float).SetInt(rawAmount), divisor).Float64()
+	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(network.TokenDecimals)), nil))
+	amountFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(rawAmount), divisor).Float64()
 
 	tol := ow.cfg.BscDepositTolerancePct
 	if tol <= 0 {
@@ -216,60 +234,52 @@ func (ow *OnchainWorker) confirmDeposit(ctx context.Context, orderID, txHash str
 	if order.AmountUSDT > 0 {
 		diff := (amountFloat - order.AmountUSDT) / order.AmountUSDT
 		if diff < -tol {
-			slog.Warn("OnchainWorker: depósito abaixo da tolerância",
-				"order_id", orderID, "expected", order.AmountUSDT,
+			slog.Warn("OnchainWorker: deposito abaixo da tolerancia",
+				"network", network.Name, "order_id", orderID, "expected", order.AmountUSDT,
 				"received", amountFloat, "diff_pct", fmt.Sprintf("%.2f%%", diff*100))
 			_ = ow.db.UpdateOrderStatus(cCtx, orderID, "aguardando_validacao", map[string]any{
-				"depositTx": txHash, "depositAmount": amountFloat, "block": blockNum,
+				"depositTx": txHash, "depositAmount": amountFloat, "block": blockNum, "network": network.Name,
 			})
 			return
 		}
 	}
 
-	slog.Info("OnchainWorker: depósito confirmado",
-		"order_id", orderID, "tx", txHash, "amount_usdt", amountFloat, "block", blockNum)
+	slog.Info("OnchainWorker: deposito confirmado",
+		"network", network.Name, "order_id", orderID, "tx", txHash, "amount_usdt", amountFloat, "block", blockNum)
 
 	if err := ow.db.UpdateOrderStatus(cCtx, orderID, "pago", map[string]any{
-		"depositTx": txHash, "depositAmount": amountFloat, "block": blockNum,
+		"depositTx": txHash, "depositAmount": amountFloat, "block": blockNum, "network": network.Name,
 	}); err != nil {
-		slog.Error("OnchainWorker: erro ao atualizar status", "order_id", orderID, "err", err)
+		slog.Error("OnchainWorker: erro ao atualizar status", "network", network.Name, "order_id", orderID, "err", err)
 		return
 	}
 
 	ow.bus.Publish(Event{
 		Type:    "payout.requested",
 		OrderID: orderID,
-		Payload: map[string]any{"txHash": txHash, "depositAmount": amountFloat, "blockNumber": blockNum},
+		Payload: map[string]any{"txHash": txHash, "depositAmount": amountFloat, "blockNumber": blockNum, "network": network.Name},
 	})
 }
 
-func (ow *OnchainWorker) getCursor(ctx context.Context, latestBlock uint64) uint64 {
-	block, found, err := ow.db.GetCursor(ctx, "BSC")
-
+func (ow *OnchainWorker) getCursor(ctx context.Context, network string, latestBlock uint64) uint64 {
+	block, found, err := ow.db.GetCursor(ctx, network)
 	if err != nil || !found || block == 0 {
 		return subtractFloor(latestBlock, 1000)
 	}
 
-	// evita pedir histórico gigante no RPC
 	const maxLookback uint64 = 50000
-
-	if latestBlock > uint64(block) &&
-		latestBlock-uint64(block) > maxLookback {
-
-		slog.Warn("BSC cursor muito antigo, resetando",
-			"old_cursor", block,
-			"latest", latestBlock,
-		)
-
+	if latestBlock > uint64(block) && latestBlock-uint64(block) > maxLookback {
+		slog.Warn("cursor on-chain muito antigo, resetando",
+			"network", network, "old_cursor", block, "latest", latestBlock)
 		return subtractFloor(latestBlock, 1000)
 	}
 
 	return uint64(block)
 }
 
-func (ow *OnchainWorker) saveCursor(ctx context.Context, block uint64) {
-	if err := ow.db.SaveCursor(ctx, "BSC", int64(block)); err != nil {
-		slog.Warn("OnchainWorker: erro ao salvar cursor", "block", block, "err", err)
+func (ow *OnchainWorker) saveCursor(ctx context.Context, network string, block uint64) {
+	if err := ow.db.SaveCursor(ctx, network, int64(block)); err != nil {
+		slog.Warn("OnchainWorker: erro ao salvar cursor", "network", network, "block", block, "err", err)
 	}
 }
 
