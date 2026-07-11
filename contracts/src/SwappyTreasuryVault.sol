@@ -7,8 +7,8 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @notice Treasury/payout vault for BSC operations.
-/// @dev Designed for USDT/BEP20 payout custody. Keep business pricing off-chain.
+/// @notice Treasury/payout vault for EVM stablecoin operations.
+/// @dev Designed for USDT/USDC style ERC20 custody on BSC, Polygon, and compatible EVM networks. Keep business pricing off-chain.
 contract SwappyTreasuryVault {
     struct TokenPolicy {
         bool allowed;
