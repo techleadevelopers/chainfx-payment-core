@@ -33,9 +33,9 @@ func newNode(url string) *Node {
 	}
 	n := &Node{URL: url}
 	n.cb = resilience.NewCircuitBreaker("rpc:"+label, resilience.CBConfig{
-		MaxFailures:     3,
-		ResetTimeout:    20 * time.Second,
-		HalfOpenSuccess: 1,
+		MaxFailures:     5,
+		ResetTimeout:    60 * time.Second,
+		HalfOpenSuccess: 2,
 	})
 	n.healthy.Store(true)
 	return n
@@ -185,14 +185,24 @@ func (p *Pool) StartHealthChecks(ctx context.Context, interval time.Duration) {
 }
 
 func (p *Pool) probeAll(ctx context.Context) {
-	for _, n := range p.nodes {
+	p.mu.RLock()
+	nodes := make([]*Node, len(p.nodes))
+	copy(nodes, p.nodes)
+	p.mu.RUnlock()
+
+	for _, n := range nodes {
 		go func(n *Node) {
+
 			pCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 
 			c, err := ethclient.DialContext(pCtx, n.URL)
 			if err != nil {
 				n.healthy.Store(false)
+				slog.Warn("RPC probe dial failed",
+					"url", truncate(n.URL, 40),
+					"err", err,
+				)
 				return
 			}
 
@@ -201,10 +211,21 @@ func (p *Pool) probeAll(ctx context.Context) {
 
 			if err != nil {
 				n.healthy.Store(false)
+				slog.Warn("RPC probe block failed",
+					"url", truncate(n.URL, 40),
+					"err", err,
+				)
 				return
 			}
 
+			if !n.healthy.Load() {
+				slog.Info("RPC node recovered",
+					"url", truncate(n.URL, 40),
+				)
+			}
+
 			n.healthy.Store(true)
+
 		}(n)
 	}
 }
