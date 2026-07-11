@@ -36,6 +36,9 @@ func newNode(url string) *Node {
 		MaxFailures:     5,
 		ResetTimeout:    60 * time.Second,
 		HalfOpenSuccess: 2,
+		IgnoreError: func(err error) bool {
+		return !rpcRetryable(err)
+	},
 	})
 	n.healthy.Store(true)
 	return n
@@ -281,4 +284,26 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func rpcRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+
+	if strings.Contains(msg, "invalid block range") ||
+		strings.Contains(msg, "block range params") ||
+		strings.Contains(msg, "invalid argument") {
+		return false
+	}
+
+	if strings.Contains(msg, "archive") ||
+		strings.Contains(msg, "debug") ||
+		strings.Contains(msg, "trace") {
+		return false
+	}
+
+	return true
 }
