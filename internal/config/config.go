@@ -104,6 +104,9 @@ type Config struct {
 
 	// LGPD / auditoria
 	LGPDSecret string
+	// Webhooks
+    WebhooksEnabled    bool
+    WebhooksMaxRetries int
 }
 
 // LoadConfig é o cara que lê o .env e joga para dentro da estrutura acima
@@ -199,6 +202,8 @@ func LoadConfig() *Config {
 		EmailAddress:   getEnv("EMAIL_COMPANY_ADDRESS", "ChainFX Payments"),
 		SupportEmail:   getEnv("SUPPORT_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
 		LGPDSecret:     getEnv("LGPD_SECRET", ""),
+		WebhooksEnabled:    getEnvAsBool("WEBHOOKS_ENABLED", true),
+		WebhooksMaxRetries: getEnvAsInt("WEBHOOKS_MAX_RETRIES", 5),
 	}
 }
 
