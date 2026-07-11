@@ -194,7 +194,7 @@ func LoadConfig() *Config {
 		SMTPFromName:   getEnv("SMTP_FROM_NAME", "ChainFX"),
 		OpsEmail:       getEnv("OPS_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
 		EmailBrandName: getEnv("EMAIL_BRAND_NAME", "ChainFX"),
-		EmailLogoURL:   getEnv("EMAIL_LOGO_URL", "https://www.chainfx.store/logo.png"),
+		EmailLogoURL:   getEnv("EMAIL_LOGO_URL", "https://res.cloudinary.com/limpeja/image/upload/v1783623705/Green_Modern_Marketing_Logo-removebg-preview_1_yivrrc.png"),
 		EmailSiteURL:   strings.TrimRight(getEnv("EMAIL_SITE_URL", "https://www.chainfx.store"), "/"),
 		EmailAddress:   getEnv("EMAIL_COMPANY_ADDRESS", "ChainFX Payments"),
 		SupportEmail:   getEnv("SUPPORT_EMAIL", getEnv("SMTP_FROM_EMAIL", "")),
