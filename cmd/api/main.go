@@ -13,6 +13,7 @@ import (
 	"payment-gateway/internal/database"
 	"payment-gateway/internal/email"
 	"payment-gateway/internal/logger"
+	"payment-gateway/internal/mobile"
 	"payment-gateway/internal/server"
 	"payment-gateway/internal/workers"
 )
@@ -36,16 +37,17 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	mailer := email.NewService(cfg)
+
 	// 2. Inicializa o gerenciador e dispara os Workers de Produção
-	workerMgr := workers.NewWorkerManager(db, cfg)
+	workerMgr := workers.NewWorkerManager(db, cfg, mailer)
 	workerMgr.StartAll(ctx)
 
-	mailer := email.NewService(cfg)
 	api := server.New(cfg, db, workerMgr, mailer)
-	api.StartAutomation(ctx)
+	mob := mobile.New(cfg, db, workerMgr)
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
-		Handler:      api.Handler(),
+		Handler:      mob.Wrap(api.Handler()),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
