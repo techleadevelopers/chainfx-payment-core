@@ -593,9 +593,11 @@ Cliente paga Pix -> Webhook confirma -> BuySendWorker dispara da wallet ChainFx 
 ### SELL USDT -> Pix
 
 1. Usuario informa chave PIX e valor BRL.
-2. Gateway gera endereco de deposito BSC deterministico.
+2. Usuario escolhe a rede de deposito: `BSC` por padrao, ou `POLYGON` quando habilitada no backend.
 3. Monitor on-chain confirma deposito USDT.
 4. `PayoutWorker` liquida PIX para o usuario.
+
+Polygon no sell e opt-in. O fluxo web/mobile existente continua usando BSC se nenhuma rede for enviada. Para aceitar `POL`, `POLYGON` ou `MATIC`, configure RPC e contrato Polygon no backend; a ordem e salva com `network=POLYGON`, cursor separado e decimals 6.
 
 ## Principais Capacidades
 
@@ -1400,6 +1402,12 @@ BSC_RPC_URL_3=...
 BSC_RPC_URL_4=...
 BSC_RPC_URL_5=...
 BSC_RPC_URL_FALLBACK=...
+
+# ============================================================
+# Blockchain - Polygon sell deposits (optional)
+# ============================================================
+POLYGON_RPC_URLS=https://polygon-rpc.com
+POLYGON_USDT_CONTRACT=0xc2132D05D31c914a87C6611C10748AEb04B58e8F
 
 # ============================================================
 # Smart Contracts
