@@ -80,7 +80,7 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 }
 
 func (s *Server) transactionFee(amountFiat float64, fiatCurrency string, rate float64) float64 {
-	if strings.EqualFold(fiatCurrency, "BRL") {
+	if strings.EqualFold(fiatCurrency, "BRL") && s.cfg.BuyTier1Bps+s.cfg.BuyTier2Bps+s.cfg.BuyTier3Bps > 0 {
 		return s.buyFeeBreakdown(amountFiat).TotalFee
 	}
 	percentFee := amountFiat * (float64(s.cfg.FeeBps) / 10000)
@@ -264,6 +264,50 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/login", s.handleAdminLogin)
 	mux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
 	mux.HandleFunc("GET /api/admin/transactions", s.handleAdminTransactions)
+	mux.HandleFunc("POST /api/agents/market-analysis", s.handleAgentMarketAnalysis)
+	mux.HandleFunc("POST /api/agents/recommend", s.handleAgentRecommend)
+	mux.HandleFunc("POST /api/agents/anomalies", s.handleAgentAnomalies)
+	mux.HandleFunc("POST /api/agents/predict", s.handleAgentPredict)
+	mux.HandleFunc("POST /api/agents/summary", s.handleAgentSummary)
+	mux.HandleFunc("GET /api/webhooks/events", s.handleListWebhookEvents)
+	mux.HandleFunc("POST /api/webhooks/subscriptions", s.handleCreateWebhookSubscription)
+	mux.HandleFunc("GET /api/webhooks/subscriptions", s.handleListWebhookSubscriptions)
+	mux.HandleFunc("DELETE /api/webhooks/subscriptions/{id}", s.handleDeleteWebhookSubscription)
+	mux.HandleFunc("POST /api/webhooks/subscriptions/{id}/active", s.handleSetWebhookSubscriptionActive)
+	mux.HandleFunc("POST /api/webhooks/subscriptions/{id}/test", s.handleTestWebhookSubscription)
+	mux.HandleFunc("GET /api/webhooks/subscriptions/{id}/logs", s.handleWebhookSubscriptionLogs)
+	mux.HandleFunc("GET /api/webhooks/dashboard", s.handleWebhookDashboard)
+	mux.HandleFunc("GET /.well-known/ai-services.json", s.handleAIServicesWellKnown)
+	mux.HandleFunc("GET /.well-known/x402.json", s.handleX402WellKnown)
+	mux.HandleFunc("GET /llms.txt", s.handleLLMSTxt)
+	mux.HandleFunc("GET /robots.txt", s.handleRobotsTxt)
+	mux.HandleFunc("GET /sitemap.xml", s.handleSitemap)
+	mux.HandleFunc("GET /marketplace/apis", s.handleMarketplaceAPIs)
+	mux.HandleFunc("GET /marketplace/apis/{id}", s.handleMarketplaceAPI)
+	mux.HandleFunc("GET /marketplace/capabilities", s.handleMarketplaceCapabilities)
+	mux.HandleFunc("GET /marketplace/capabilities/{id}", s.handleMarketplaceCapability)
+	mux.HandleFunc("GET /marketplace/capabilities/{id}/contract", s.handleMarketplaceCapabilityContract)
+	mux.HandleFunc("POST /marketplace/capabilities/{id}/purchase", s.handleMarketplaceCapabilityPurchase)
+	mux.HandleFunc("POST /marketplace/capabilities/{id}/usage", s.handleMarketplaceCapabilityUsage)
+	mux.HandleFunc("GET /marketplace/products", s.handleMarketplaceProducts)
+	mux.HandleFunc("GET /marketplace/products/{id}", s.handleMarketplaceProduct)
+	mux.HandleFunc("POST /marketplace/purchase", s.handleMarketplacePurchaseCreate)
+	mux.HandleFunc("GET /marketplace/purchase/{id}", s.handleMarketplacePurchaseGet)
+	mux.HandleFunc("POST /marketplace/purchase/{id}/execute", s.handleMarketplacePurchaseExecute)
+	mux.HandleFunc("POST /marketplace/usage", s.handleMarketplaceUsage)
+	mux.HandleFunc("POST /v1/access/quote", s.handleAccessQuote)
+	mux.HandleFunc("POST /v1/access/purchase", s.handleAccessPurchase)
+	mux.HandleFunc("GET /v1/access/{id}", s.handleAccessGet)
+	mux.HandleFunc("POST /v1/meter/usage", s.handleMeterUsage)
+	mux.HandleFunc("GET /agent/v1/capabilities", s.handleAgentCapabilities)
+	mux.HandleFunc("POST /agent/connect", s.handleAgentConnect)
+	mux.HandleFunc("GET /agent/v1/capabilities/{capability}/contract", s.handleAgentCapabilityContract)
+	mux.HandleFunc("POST /agent/v1/capabilities/{capability}/route", s.handleAgentCapabilityRoute)
+	mux.HandleFunc("POST /agent/v1/capabilities/{capability}/execute", s.handleAgentCapabilityExecute)
+	mux.HandleFunc("GET /agent/v1/assets", s.handleAgentAssets)
+	mux.HandleFunc("POST /agent/v1/trade/quote", s.handleAgentTradeQuote)
+	mux.HandleFunc("POST /agent/v1/trade/execute", s.handleAgentTradeExecute)
+	mux.HandleFunc("GET /agent/v1/trade/{id}", s.handleAgentTradeGet)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /rates", s.handleChainFXRates)
 	mux.HandleFunc("POST /quote", s.handleChainFXQuote)
@@ -1176,25 +1220,67 @@ func (s *Server) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 			},
 		},
 		"paths": map[string]any{
-			"/rates":                  map[string]any{"get": map[string]any{"summary": "Current FX and crypto rates"}},
-			"/quote":                  map[string]any{"post": map[string]any{"summary": "Create a rate-locked quote"}},
-			"/buy":                    map[string]any{"post": map[string]any{"summary": "Create a PIX/card to USDT order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/sell":                   map[string]any{"post": map[string]any{"summary": "Create a USDT to PIX BRL order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/order/{id}":             map[string]any{"get": map[string]any{"summary": "Read an order by ID"}},
-			"/webhooks/test":          map[string]any{"post": map[string]any{"summary": "Generate a simulated webhook payload", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/webhooks/retry":         map[string]any{"post": map[string]any{"summary": "Retry a webhook for an existing order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/developers/api-keys":    map[string]any{"get": map[string]any{"summary": "List configured API keys masked", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/developers/logs":        map[string]any{"get": map[string]any{"summary": "List recent developer logs", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/api/admin/overview":     map[string]any{"get": map[string]any{"summary": "Owner operational overview with readiness, metrics, recent transactions and audit events", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
-			"/api/admin/transactions": map[string]any{"get": map[string]any{"summary": "Owner transaction ledger for buy and sell reconciliation", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/rates":                                       map[string]any{"get": map[string]any{"summary": "Current FX and crypto rates"}},
+			"/quote":                                       map[string]any{"post": map[string]any{"summary": "Create a rate-locked quote"}},
+			"/buy":                                         map[string]any{"post": map[string]any{"summary": "Create a PIX/card to USDT order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/sell":                                        map[string]any{"post": map[string]any{"summary": "Create a USDT to PIX BRL order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/order/{id}":                                  map[string]any{"get": map[string]any{"summary": "Read an order by ID"}},
+			"/webhooks/test":                               map[string]any{"post": map[string]any{"summary": "Generate a simulated webhook payload", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/webhooks/retry":                              map[string]any{"post": map[string]any{"summary": "Retry a webhook for an existing order", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/developers/api-keys":                         map[string]any{"get": map[string]any{"summary": "List configured API keys masked", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/developers/logs":                             map[string]any{"get": map[string]any{"summary": "List recent developer logs", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/mcp/initialize":                              map[string]any{"post": map[string]any{"summary": "Initialize MCP HTTP session for autonomous agents", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/mcp/tools/list":                              map[string]any{"post": map[string]any{"summary": "List MCP tools exposed by ChainFX", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/mcp/tools/call":                              map[string]any{"post": map[string]any{"summary": "Call an MCP tool exposed by ChainFX", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/agents/market-analysis":                  map[string]any{"post": map[string]any{"summary": "Generate AI market analysis from current rates", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/agents/recommend":                        map[string]any{"post": map[string]any{"summary": "Generate AI buy/sell/hold recommendation", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/agents/anomalies":                        map[string]any{"post": map[string]any{"summary": "Detect anomalies in transaction payloads", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/agents/predict":                          map[string]any{"post": map[string]any{"summary": "Generate short-horizon price prediction", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/agents/summary":                          map[string]any{"post": map[string]any{"summary": "Summarize transaction activity", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/webhooks/events":                         map[string]any{"get": map[string]any{"summary": "List automation webhook event names"}},
+			"/api/webhooks/subscriptions":                  map[string]any{"get": map[string]any{"summary": "List automation webhook subscriptions", "security": []map[string][]string{{"bearerAuth": []string{}}}}, "post": map[string]any{"summary": "Create automation webhook subscription", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/webhooks/dashboard":                      map[string]any{"get": map[string]any{"summary": "Webhook delivery health dashboard", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/.well-known/ai-services.json":                map[string]any{"get": map[string]any{"summary": "Agent service discovery document"}},
+			"/.well-known/x402.json":                       map[string]any{"get": map[string]any{"summary": "x402-compatible payment discovery document"}},
+			"/llms.txt":                                    map[string]any{"get": map[string]any{"summary": "LLM-readable service description"}},
+			"/marketplace/apis":                            map[string]any{"get": map[string]any{"summary": "List API products agents can buy with stablecoins"}},
+			"/marketplace/apis/{id}":                       map[string]any{"get": map[string]any{"summary": "Read one API product"}},
+			"/marketplace/capabilities":                    map[string]any{"get": map[string]any{"summary": "List capability-first marketplace entries for agents"}},
+			"/marketplace/capabilities/{id}":               map[string]any{"get": map[string]any{"summary": "Read one marketplace capability and its active plans"}},
+			"/marketplace/capabilities/{id}/contract":      map[string]any{"get": map[string]any{"summary": "Read a versioned capability input/output contract"}},
+			"/marketplace/capabilities/{id}/purchase":      map[string]any{"post": map[string]any{"summary": "Create a payment intent for a capability-selected active plan", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/marketplace/capabilities/{id}/usage":         map[string]any{"post": map[string]any{"summary": "Debit usage for a capability-bound access grant", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/marketplace/products":                        map[string]any{"get": map[string]any{"summary": "List premium marketplace API products and active plans"}},
+			"/marketplace/products/{id}":                   map[string]any{"get": map[string]any{"summary": "Read one premium marketplace product"}},
+			"/marketplace/purchase":                        map[string]any{"post": map[string]any{"summary": "Create a BSC stablecoin marketplace payment intent", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/marketplace/purchase/{id}":                   map[string]any{"get": map[string]any{"summary": "Read marketplace purchase status", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/marketplace/purchase/{id}/execute":           map[string]any{"post": map[string]any{"summary": "Verify ERC20 receipt and issue marketplace access grant", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/marketplace/usage":                           map[string]any{"post": map[string]any{"summary": "Debit marketplace API usage quota with access token", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/v1/access/quote":                             map[string]any{"post": map[string]any{"summary": "Create a BSC USDT quote for temporary API access"}},
+			"/v1/access/purchase":                          map[string]any{"post": map[string]any{"summary": "Verify BSC USDT payment and issue temporary API access token"}},
+			"/v1/access/{id}":                              map[string]any{"get": map[string]any{"summary": "Read access quote or grant status"}},
+			"/v1/meter/usage":                              map[string]any{"post": map[string]any{"summary": "Debit API usage quota before executing paid work", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/agent/v1/capabilities":                       map[string]any{"get": map[string]any{"summary": "Machine-readable capabilities, lifecycle, fees and security model for autonomous agents"}},
+			"/agent/connect":                               map[string]any{"post": map[string]any{"summary": "Create a ChainFX agent identity and API credential", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/agent/v1/capabilities/{capability}/contract": map[string]any{"get": map[string]any{"summary": "Read a capability execution contract for agent/provider interoperability"}},
+			"/agent/v1/capabilities/{capability}/route":    map[string]any{"post": map[string]any{"summary": "Preview provider route candidates by price, latency, quality and enterprise policy", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/agent/v1/capabilities/{capability}/execute":  map[string]any{"post": map[string]any{"summary": "Execute a capability through the hybrid Capability Router with real metering and mock fallback", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/agent/v1/assets":                             map[string]any{"get": map[string]any{"summary": "List stablecoin symbols enabled for machine-to-machine liquidity trades"}},
+			"/agent/v1/trade/quote":                        map[string]any{"post": map[string]any{"summary": "Create a machine-to-machine liquidity quote between enabled BSC stablecoin symbols"}},
+			"/agent/v1/trade/execute":                      map[string]any{"post": map[string]any{"summary": "Verify on-chain stablecoin payment and settle receiveAsset to agent wallet"}},
+			"/agent/v1/trade/{id}":                         map[string]any{"get": map[string]any{"summary": "Read machine trade intent status"}},
+			"/api/admin/overview":                          map[string]any{"get": map[string]any{"summary": "Owner operational overview with readiness, metrics, recent transactions and audit events", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
+			"/api/admin/transactions":                      map[string]any{"get": map[string]any{"summary": "Owner transaction ledger for buy and sell reconciliation", "security": []map[string][]string{{"bearerAuth": []string{}}}}},
 		},
 		"x-chainfx": map[string]any{
-			"category":        "Digital FX Payments Infrastructure",
-			"phase":           "3",
-			"supportedAssets": []string{"USDT"},
-			"phase2":          []string{"Developer Dashboard", "API Keys", "Logs", "Webhook Retry"},
-			"phase3":          []string{"Node SDK", "Python SDK", "OpenAPI", "Examples"},
-			"notNow":          []string{"bridge", "pool", "AMM", "yield", "DEX", "LP"},
+			"category":           "Digital FX Payments Infrastructure",
+			"phase":              "3",
+			"supportedAssets":    []string{"USDT"},
+			"agentMarketplace":   []string{"Capability-first catalog", "USDT/USDC on BSC premium API capability purchases", "20% default ChainFX take rate", "request-bound payment intents", "chain_id + tx_hash + log_index receipt verification", "quota metering", "provider settlement ledger pending manual payout"},
+			"agentLiquidityRail": []string{"Enabled BSC stablecoin pairs from /agent/v1/assets", "USDT/USDC active by default", "BUSD registered as legacy disabled asset", "6% ChainFX execution fee", "on-chain receipt verification", "signer-backed treasury settlement", "idempotency and nonce-bound intents"},
+			"phase2":             []string{"Developer Dashboard", "API Keys", "Logs", "Webhook Retry"},
+			"phase3":             []string{"Node SDK", "Python SDK", "OpenAPI", "Examples"},
+			"notNow":             []string{"bridge", "pool", "AMM", "yield", "DEX", "LP"},
 		},
 	})
 }
