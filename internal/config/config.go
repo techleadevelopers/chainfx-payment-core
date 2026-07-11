@@ -104,9 +104,15 @@ type Config struct {
 
 	// LGPD / auditoria
 	LGPDSecret string
+
 	// Webhooks
     WebhooksEnabled    bool
     WebhooksMaxRetries int
+
+	// OpenAI / AI Agents
+	OpenAIAPIKey  string
+	OpenAIModel   string
+	OpenAIBaseURL string
 }
 
 // LoadConfig é o cara que lê o .env e joga para dentro da estrutura acima
@@ -204,6 +210,10 @@ func LoadConfig() *Config {
 		LGPDSecret:     getEnv("LGPD_SECRET", ""),
 		WebhooksEnabled:    getEnvAsBool("WEBHOOKS_ENABLED", true),
 		WebhooksMaxRetries: getEnvAsInt("WEBHOOKS_MAX_RETRIES", 5),
+		OpenAIAPIKey:  getEnv("OPENAI_API_KEY", ""),
+		OpenAIModel:   getEnv("OPENAI_MODEL", "gpt-5.5"),
+		OpenAIBaseURL: strings.TrimRight(getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/",
+),
 	}
 }
 
