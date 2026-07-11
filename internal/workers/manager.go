@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"payment-gateway/internal/config"
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/email"
 	"sync"
 )
 
@@ -15,34 +16,25 @@ type WorkerManager struct {
 	BuySendWorker *BuySendWorker
 	OnchainWorker *OnchainWorker
 	SweepWorker   *SweepWorker
-	// Phase 5 workers (mobile-only)
-	KYCWorker             *KYCWorker
-	SwapWorker            *SwapWorker
-	PushNotifWorker       *PushNotifWorker
-	WebhookDeliveryWorker *WebhookDeliveryWorker
-	db                    *database.DB
-	cfg                   *config.Config
-	wg                    sync.WaitGroup
+	EmailWorker   *EmailWorker
+	db            *database.DB
+	cfg           *config.Config
+	wg            sync.WaitGroup
 }
 
-func NewWorkerManager(db *database.DB, cfg *config.Config) *WorkerManager {
+func NewWorkerManager(db *database.DB, cfg *config.Config, mailer *email.Service) *WorkerManager {
 	bus := NewEventBus()
-	pw := NewPriceWorker(bus)
 
 	return &WorkerManager{
 		Bus:           bus,
-		PriceWorker:   pw,
+		PriceWorker:   NewPriceWorker(bus),
 		PayoutWorker:  NewPayoutWorker(bus, db, cfg),
 		BuySendWorker: NewBuySendWorker(bus, db, cfg),
 		OnchainWorker: NewOnchainWorker(bus, db, cfg),
 		SweepWorker:   NewSweepWorker(bus, db, cfg),
-		// Phase 5
-		KYCWorker:             NewKYCWorker(bus, db, cfg),
-		SwapWorker:            NewSwapWorker(bus, db, cfg, pw),
-		PushNotifWorker:       NewPushNotifWorker(bus, db),
-		WebhookDeliveryWorker: NewWebhookDeliveryWorker(bus, db, cfg),
-		db:                    db,
-		cfg:                   cfg,
+		EmailWorker:   NewEmailWorker(bus, db, mailer),
+		db:            db,
+		cfg:           cfg,
 	}
 }
 
@@ -51,20 +43,37 @@ func NewWorkerManager(db *database.DB, cfg *config.Config) *WorkerManager {
 func (wm *WorkerManager) StartAll(ctx context.Context) {
 	slog.Info("Iniciando todos os workers...")
 
-	wm.wg.Add(9) // 5 core + 4 Phase-5
+	wm.wg.Add(6)
 
-	// ── Core workers ─────────────────────────────────────────────────────────
-	go func() { defer wm.wg.Done(); wm.PriceWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.PayoutWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.BuySendWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.OnchainWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.SweepWorker.Start(ctx) }()
+	go func() {
+		defer wm.wg.Done()
+		wm.PriceWorker.Start(ctx)
+	}()
 
-	// ── Phase 5 workers (mobile) ──────────────────────────────────────────────
-	go func() { defer wm.wg.Done(); wm.KYCWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.SwapWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.PushNotifWorker.Start(ctx) }()
-	go func() { defer wm.wg.Done(); wm.WebhookDeliveryWorker.Start(ctx) }()
+	go func() {
+		defer wm.wg.Done()
+		wm.PayoutWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.BuySendWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.OnchainWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.SweepWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.EmailWorker.Start(ctx)
+	}()
 
 	slog.Info("Todos os workers iniciados com sucesso")
 }
