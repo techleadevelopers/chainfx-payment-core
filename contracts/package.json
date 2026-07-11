@@ -6,10 +6,16 @@
     "compile": "hardhat compile",
     "test": "hardhat test",
     "deploy:bsc": "hardhat run scripts/deploy.js --network bsc",
-    "deploy:testnet": "hardhat run scripts/deploy.js --network bscTestnet"
+    "deploy:testnet": "hardhat run scripts/deploy.js --network bscTestnet",
+    "smoke:testnet": "hardhat run scripts/smoke-testnet.js --network bscTestnet"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "ci-info": "^4.3.0",
+    "chai": "^4.5.0",
     "hardhat": "^2.26.0"
+  },
+  "overrides": {
+    "ci-info": "^4.3.0"
   }
 }
