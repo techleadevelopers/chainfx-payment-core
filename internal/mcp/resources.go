@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"payment-gateway/internal/database"
 	"payment-gateway/internal/webhooks"
 )
 
@@ -19,10 +20,14 @@ type Resource struct {
 
 func (s *Server) resources() []Resource {
 	return []Resource{
-		{URI: "chainfx://rates/latest", Name: "Cotações atuais", Description: "USDT/BRL, USDT/USD, BTC/USDT e demais pares suportados.", MimeType: "application/json"},
-		{URI: "chainfx://webhooks/events", Name: "Eventos de automação", Description: "Lista de eventos disponíveis para n8n/Zapier/Make.", MimeType: "application/json"},
-		{URI: "chainfx://webhooks/subscriptions", Name: "Assinaturas de webhook", Description: "Assinaturas de automação configuradas atualmente.", MimeType: "application/json"},
-		{URI: "chainfx://orders/{id}", Name: "Ordem por id", Description: "Detalhes de uma ordem de compra ou venda específica. Substitua {id} pelo id real.", MimeType: "application/json"},
+		{URI: "chainfx://rates/latest", Name: "Current rates", Description: "USDT/BRL, USDT/USD, BTC/USDT and supported pairs.", MimeType: "application/json"},
+		{URI: "chainfx://marketplace/capabilities", Name: "Capability Network", Description: "Capability-first network for AI agents to discover, execute, meter, bill and settle digital capabilities.", MimeType: "application/json"},
+		{URI: "chainfx://capability-contracts/{id}", Name: "Capability Contract", Description: "Versioned input/output contract for a capability. Replace {id} with document_ocr, llm_chat, etc.", MimeType: "application/json"},
+		{URI: "chainfx://marketplace/products", Name: "Marketplace Products", Description: "Premium marketplace products and plans kept for product-level compatibility.", MimeType: "application/json"},
+		{URI: "chainfx://agent/assets", Name: "Agent Rail Assets", Description: "Stablecoin assets enabled for Agent Rail and capability payments.", MimeType: "application/json"},
+		{URI: "chainfx://webhooks/events", Name: "Automation events", Description: "Automation webhook events available to n8n/Zapier/Make.", MimeType: "application/json"},
+		{URI: "chainfx://webhooks/subscriptions", Name: "Webhook subscriptions", Description: "Currently configured automation subscriptions.", MimeType: "application/json"},
+		{URI: "chainfx://orders/{id}", Name: "Order by id", Description: "Details for a buy/sell order. Replace {id} with the real id.", MimeType: "application/json"},
 	}
 }
 
@@ -37,7 +42,7 @@ type resourceReadRequest struct {
 func (s *Server) handleResourcesRead(w http.ResponseWriter, r *http.Request) {
 	var req resourceReadRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeMCPError(w, http.StatusBadRequest, "JSON inválido")
+		writeMCPError(w, http.StatusBadRequest, "JSON invalido")
 		return
 	}
 	content, err := s.readResource(r.Context(), req.URI)
@@ -54,6 +59,22 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 	switch {
 	case uri == "chainfx://rates/latest":
 		return s.toolGetRates(), nil
+	case uri == "chainfx://marketplace/capabilities":
+		return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
+	case strings.HasPrefix(uri, "chainfx://capability-contracts/"):
+		id := strings.TrimPrefix(uri, "chainfx://capability-contracts/")
+		contract, err := s.db.GetMarketplaceCapabilityContract(ctx, id, "v1")
+		if err != nil {
+			return nil, err
+		}
+		if contract == nil {
+			return nil, fmt.Errorf("contrato de capability nao encontrado: %s", id)
+		}
+		return contract, nil
+	case uri == "chainfx://marketplace/products":
+		return s.db.ListMarketplaceProducts(ctx, database.MarketplaceProductFilters{})
+	case uri == "chainfx://agent/assets":
+		return s.db.ListAgentSupportedAssets(ctx)
 	case uri == "chainfx://webhooks/events":
 		return webhooks.AllEvents(), nil
 	case uri == "chainfx://webhooks/subscriptions":
