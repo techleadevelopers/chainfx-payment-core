@@ -1384,6 +1384,45 @@ CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_created ON mcp_tool_logs(created_at
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_tool ON mcp_tool_logs(tool_name, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_key ON mcp_tool_logs(api_key_hash, created_at DESC) WHERE api_key_hash IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS developer_projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  environment TEXT NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox','production')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','disabled')),
+  spending_limit_usdt NUMERIC(28,8) NOT NULL DEFAULT 0,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_developer_projects_environment ON developer_projects(environment, status);
+
+CREATE TABLE IF NOT EXISTS developer_api_keys (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES developer_projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  environment TEXT NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox','production')),
+  public_key TEXT NOT NULL UNIQUE,
+  secret_key_hash TEXT NOT NULL UNIQUE,
+  log_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled','revoked')),
+  scopes_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ip_restrictions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rate_limit_per_minute INT NOT NULL DEFAULT 600,
+  spending_limit_usdt NUMERIC(28,8) NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  last_used_at TIMESTAMPTZ,
+  rotated_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_developer_api_keys_project ON developer_api_keys(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_developer_api_keys_secret_hash ON developer_api_keys(secret_key_hash);
+CREATE INDEX IF NOT EXISTS idx_developer_api_keys_log_hash ON developer_api_keys(log_hash);
+
 CREATE TABLE IF NOT EXISTS webhook_subscriptions (
   id UUID PRIMARY KEY,
   provider VARCHAR(32) NOT NULL DEFAULT 'generic',
@@ -1846,6 +1885,34 @@ CREATE TABLE IF NOT EXISTS marketplace_agent_identities (
 
 CREATE INDEX IF NOT EXISTS idx_mp_agent_identities_wallet ON marketplace_agent_identities(wallet) WHERE wallet IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_mp_agent_identities_status ON marketplace_agent_identities(status);
+
+CREATE TABLE IF NOT EXISTS marketplace_agent_policies (
+  agent_id TEXT PRIMARY KEY REFERENCES marketplace_agent_identities(agent_id) ON DELETE CASCADE,
+  environment TEXT NOT NULL DEFAULT 'sandbox' CHECK (environment IN ('sandbox','production')),
+  agent_type TEXT NOT NULL DEFAULT 'autonomous',
+  wallet_mode TEXT NOT NULL DEFAULT 'existing',
+  daily_limit_usdt NUMERIC(28,8) NOT NULL DEFAULT 500,
+  monthly_limit_usdt NUMERIC(28,8) NOT NULL DEFAULT 5000,
+  max_transaction_usdt NUMERIC(28,8) NOT NULL DEFAULT 100,
+  allowed_assets_json JSONB NOT NULL DEFAULT '["USDT","USDC"]'::jsonb,
+  allowed_capabilities_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_providers_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  permissions_json JSONB NOT NULL DEFAULT '["capabilities:read","capabilities:purchase","capabilities:execute","trades:create","settlements:read","webhooks:write"]'::jsonb,
+  require_real_provider BOOLEAN NOT NULL DEFAULT false,
+  mock_fallback BOOLEAN NOT NULL DEFAULT true,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','disabled')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_agent_policies_environment ON marketplace_agent_policies(environment, status);
+
+CREATE TABLE IF NOT EXISTS developer_project_agents (
+  project_id TEXT NOT NULL REFERENCES developer_projects(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL REFERENCES marketplace_agent_identities(agent_id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, agent_id)
+);
 
 CREATE TABLE IF NOT EXISTS marketplace_execution_events (
   id TEXT PRIMARY KEY,
