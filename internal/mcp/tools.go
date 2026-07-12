@@ -1083,6 +1083,9 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 	if agentWallet == "" {
 		return nil, fmt.Errorf("agent_wallet e obrigatorio")
 	}
+	if !common.IsHexAddress(agentWallet) {
+		return nil, fmt.Errorf("agent_wallet deve ser um endereco EVM valido")
+	}
 
 	var feeBps int
 	switch paymentType {
@@ -1113,6 +1116,14 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 	feeUSDT := grossUSDT * (float64(feeBps) / 10_000.0)
 	requiredUSDT := grossUSDT + feeUSDT
 
+	_, decision, policyErr := s.db.ValidateAgentPaymentPolicy(ctx, agentWallet, "USDT", fmt.Sprintf("%.6f", requiredUSDT))
+	if policyErr != nil {
+		return nil, policyErr
+	}
+	if !decision.Allowed {
+		return nil, fmt.Errorf("%s: %s", decision.Code, decision.Message)
+	}
+
 	// ── Intent ID ─────────────────────────────────────────────────────────────
 	reqHash := database.CanonicalRequestHash(paymentType, amountBRLStr, pixKey, idempotencyKey, agentWallet)
 	hashShort := reqHash
@@ -1122,6 +1133,9 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 	intentID := "int_m2m_" + hashShort
 
 	paymentAddress := strings.ToLower(strings.TrimSpace(s.cfg.TreasuryHot))
+	if !common.IsHexAddress(paymentAddress) {
+		return nil, fmt.Errorf("TREASURY_HOT deve ser um endereco EVM valido")
+	}
 
 	in := database.M2MCreateInput{
 		ID:             intentID,
