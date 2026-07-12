@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/money"
 	"payment-gateway/internal/security"
 
 	"github.com/ethereum/go-ethereum"
@@ -291,22 +292,20 @@ func calculateAgentTradeAmounts(amount float64, amountType string, feeBps int) (
 	if feeBps <= 0 || feeBps >= 10000 {
 		return agentTradeAmounts{}, fmt.Errorf("feeBps invalido")
 	}
-	feeRate := float64(feeBps) / 10000
-	var payAmount, receiveAmount float64
+	amountUnits := money.TokenFromFloat(amount)
+	var payUnits, receiveUnits money.TokenUnits
 	switch amountType {
 	case "pay":
-		payAmount = amount
-		receiveAmount = amount * (1 - feeRate)
+		payUnits = amountUnits
+		receiveUnits = payUnits - money.TokenFeeBps(payUnits, feeBps)
 	case "receive", "":
-		receiveAmount = amount
-		payAmount = amount / (1 - feeRate)
+		receiveUnits = amountUnits
+		payUnits = money.GrossForNetToken(receiveUnits, feeBps)
 	default:
 		return agentTradeAmounts{}, fmt.Errorf("amountType deve ser pay ou receive")
 	}
-	payAmount = math.Round(payAmount*1_000_000) / 1_000_000
-	receiveAmount = math.Round(receiveAmount*1_000_000) / 1_000_000
-	fee := math.Round((payAmount-receiveAmount)*1_000_000) / 1_000_000
-	return agentTradeAmounts{PayAmount: payAmount, ReceiveAmount: receiveAmount, ChainFXFeeAmount: fee, FeeCalculation: "deducted_from_gross_payment"}, nil
+	feeUnits := payUnits - receiveUnits
+	return agentTradeAmounts{PayAmount: payUnits.Float64(), ReceiveAmount: receiveUnits.Float64(), ChainFXFeeAmount: feeUnits.Float64(), FeeCalculation: "deducted_from_gross_payment"}, nil
 }
 
 func maxInt(a, b int) int {
