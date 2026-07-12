@@ -247,6 +247,19 @@ func (s *Server) withDeveloperRequestLog(next http.Handler) http.Handler {
 		if s.cfg != nil && s.cfg.IsProduction() {
 			apiKey = chainFXAPIKeyFromHeader(r)
 			auth = s.chainFXAuthForKey(apiKey)
+			if !auth.Valid && apiKey != "" {
+				if validated, err := s.db.ValidateDeveloperAPIKey(r.Context(), apiKey); err == nil && validated != nil {
+					auth = chainFXAuth{
+						Valid:         true,
+						Sandbox:       validated.Environment != "production",
+						Mode:          validated.Environment,
+						ProjectID:     validated.ProjectID,
+						APIKeyID:      validated.KeyID,
+						APIKeyLogHash: validated.LogHash,
+						Scopes:        validated.Scopes,
+					}
+				}
+			}
 		}
 		authMode := auth.Mode
 		if authMode == "" {
@@ -256,6 +269,10 @@ func (s *Server) withDeveloperRequestLog(next http.Handler) http.Handler {
 		if apiKey != "" {
 			scope = "api_key"
 		}
+		apiKeyHash := shortSecretHash(apiKey)
+		if auth.APIKeyLogHash != "" {
+			apiKeyHash = auth.APIKeyLogHash
+		}
 		_ = s.db.RecordAPIRequestLog(context.Background(), database.APIRequestLogInput{
 			RequestID:   requestID(r),
 			Method:      r.Method,
@@ -263,7 +280,7 @@ func (s *Server) withDeveloperRequestLog(next http.Handler) http.Handler {
 			RouteClass:  smartRateLimitRouteClass(r),
 			StatusCode:  status,
 			DurationMS:  duration.Milliseconds(),
-			APIKeyHash:  shortSecretHash(apiKey),
+			APIKeyHash:  apiKeyHash,
 			APIKeyScope: scope,
 			AuthMode:    authMode,
 			ClientIP:    clientIP(r),
