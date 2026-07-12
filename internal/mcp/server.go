@@ -15,9 +15,7 @@ package mcp
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +23,6 @@ import (
 	"payment-gateway/internal/agents"
 	"payment-gateway/internal/config"
 	"payment-gateway/internal/database"
-	"payment-gateway/internal/metrics"
 	"payment-gateway/internal/webhooks"
 	"payment-gateway/internal/workers"
 )

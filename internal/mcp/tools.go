@@ -272,6 +272,11 @@ func (s *Server) handleToolsCall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ── Dispatch ──────────────────────────────────────────────────────────────
+	// Inject the raw API key into the context so tool implementations can
+	// read it via mcpAPIKeyFromCtx (used for IDOR-safe webhook listing).
+	ctx := context.WithValue(r.Context(), mcpAPIKeyCtxKey{}, apiKey)
+	r = r.WithContext(ctx)
+
 	var req toolCallRequest
 	if err := decodeJSON(r, &req); err != nil {
 		s.recordMCPToolLog(r, "", "error", "invalid_json", time.Since(start))
@@ -1300,6 +1305,12 @@ func (s *Server) mcpPaymentContract(ctx context.Context, asset string) (string, 
 		return strings.ToLower(s.cfg.BscUsdtContract), nil
 	}
 	return "", fmt.Errorf("%s BSC nao configurado na allowlist", symbol)
+}
+
+// stringFromMap is an alias for stringArg used in marketplace execution contexts
+// where the input map comes from a JSON-decoded event payload.
+func stringFromMap(m map[string]any, key string) string {
+	return stringArg(m, key)
 }
 
 func stringArg(args map[string]any, key string) string {
