@@ -55,7 +55,7 @@ func (s *Server) handleAppPurchaseDetail(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"purchase": detail,
+		"purchase":     detail,
 		"feeBreakdown": purchaseFeeBreakdown(detail),
 		"lifecycle":    marketplacePurchaseLifecycle(),
 	})
@@ -169,6 +169,9 @@ func (s *Server) handleAppFees(w http.ResponseWriter, r *http.Request) {
 // ─── MCP Test Connection ──────────────────────────────────────────────────────
 
 func (s *Server) handleMCPTestConnection(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.authorizeChainFX(w, r); !ok {
+		return
+	}
 	ctx := r.Context()
 	dbOK := s.db != nil
 	if dbOK {
@@ -186,11 +189,11 @@ func (s *Server) handleMCPTestConnection(w http.ResponseWriter, r *http.Request)
 		status = "degraded"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":          status,
-		"timestamp":       time.Now().UTC(),
-		"protocol":        "MCP/2024-11-05",
-		"serverName":      "ChainFX",
-		"serverVersion":   "1.0.0",
+		"status":        status,
+		"timestamp":     time.Now().UTC(),
+		"protocol":      "MCP/2024-11-05",
+		"serverName":    "ChainFX",
+		"serverVersion": "1.0.0",
 		"capabilities": map[string]any{
 			"tools":     map[string]any{"listChanged": false},
 			"resources": map[string]any{"listChanged": false},
@@ -201,7 +204,7 @@ func (s *Server) handleMCPTestConnection(w http.ResponseWriter, r *http.Request)
 			"priceWorker": priceOK,
 			"usdtBrlRate": s.workers.PriceWorker.GetPrice("BRL"),
 		},
-		"toolCount":    toolCount,
+		"toolCount": toolCount,
 		"endpoints": map[string]string{
 			"initialize":    "POST /mcp/initialize",
 			"toolsList":     "POST /mcp/tools/list",
@@ -253,8 +256,8 @@ func (s *Server) handleAppWebhooksUI(w http.ResponseWriter, r *http.Request) {
 
 	if isJSONRequest(r) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"subscriptions": subs,
-			"stats":         stats,
+			"subscriptions":   subs,
+			"stats":           stats,
 			"availableEvents": webhookEventList(),
 		})
 		return
@@ -499,8 +502,8 @@ func agentFeeLayer() []map[string]any {
 	return []map[string]any{
 		{"layer": "marketplace_purchase", "model": "take-rate bps per plan", "paidBy": "agent buyer"},
 		{"layer": "capability_execution", "model": "quota debit per unit", "paidBy": "agent (pre-paid)"},
-		{"layer": "m2m_pix", "model": "10% on gross USDT", "paidBy": "calling agent"},
-		{"layer": "m2m_credit_card", "model": "19% on gross USDT", "paidBy": "calling agent"},
+		{"layer": "m2m_pix", "model": "configured M2M_PIX_FEE_BPS on gross USDT", "paidBy": "calling agent"},
+		{"layer": "m2m_credit_card", "model": "configured M2M_CREDIT_FEE_BPS on gross USDT", "paidBy": "calling agent"},
 	}
 }
 
@@ -569,4 +572,3 @@ func isJSONRequest(r *http.Request) bool {
 		strings.HasSuffix(r.URL.Path, ".json") ||
 		r.URL.Query().Get("format") == "json"
 }
-
