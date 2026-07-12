@@ -226,6 +226,22 @@ func (w *M2MSettlementWorker) runSettlement(ctx context.Context, intent *databas
 		if lErr == nil && lTx != nil {
 			_ = w.db.MarkM2MFailed(ctx, lTx, intent.ID, err.Error(), permanent)
 		}
+		// Publish m2m.settlement.failed to the bus so the webhook dispatcher
+		// can fan it out to subscribers (canonical event: m2m.settlement.failed).
+		// Permanent failures are published immediately; transient failures are
+		// enqueued on the DLQ and also published so subscribers are notified early.
+		w.bus.Publish(Event{
+			Type:    "m2m.settlement.failed",
+			OrderID: intent.ID,
+			Payload: map[string]any{
+				"intent_id":    intent.ID,
+				"permanent":    permanent,
+				"error":        err.Error(),
+				"attempts":     intent.Attempts,
+				"payment_type": string(intent.PaymentType),
+				"amount_brl":   intent.AmountBRL,
+			},
+		})
 		if !permanent {
 			w.dlq.Push(Event{Type: "m2m.settlement.failed", OrderID: intent.ID}, intent.Attempts, err.Error())
 		}

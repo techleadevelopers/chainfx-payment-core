@@ -318,6 +318,11 @@ func (db *DB) GetMarketplaceProduct(ctx context.Context, idOrSlug string) (*Mark
 	return products[0], nil
 }
 
+// EmptyMarketplaceFilters returns a zero-value filter for convenience.
+func (db *DB) EmptyMarketplaceFilters() MarketplaceProductFilters {
+	return MarketplaceProductFilters{}
+}
+
 func (db *DB) ListMarketplaceCapabilities(ctx context.Context, f MarketplaceProductFilters) ([]*MarketplaceCapability, error) {
 	args := []any{}
 	where := []string{"c.status = 'active'"}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/webhooks"
 )
 
 // ─── Agent Detail ─────────────────────────────────────────────────────────────
@@ -228,15 +229,15 @@ func (s *Server) handleMCPTestConnection(w http.ResponseWriter, r *http.Request)
 // can count them without importing the mcp package).
 func (s *Server) mcpToolNames() []string {
 	return []string{
-		"getRate", "getQuote", "createBuyOrder", "createSellOrder", "getOrder",
-		"listCapabilities", "getCapabilityContract", "routeCapability", "executeCapability",
-		"createAccessQuote", "purchaseAccess", "getAccessGrant", "meterUsage",
-		"listMarketplaceProducts", "getMarketplaceProduct", "purchaseMarketplace",
-		"getMarketplacePurchase", "executeMarketplacePurchase", "debitMarketplaceUsage",
-		"agentConnect", "getAgentPolicy", "updateAgentPolicy", "agentTradeQuote",
-		"agentTradeExecute", "getAgentTrade",
-		"createWebhookSubscription", "listWebhookSubscriptions", "triggerTestWebhook",
+		"get_rates", "searchCapabilities", "listCapabilities", "getCapability",
+		"getCapabilityContract", "purchaseCapability", "getPurchase", "executeCapability",
+		"chooseRoute", "getUsage", "listAssets", "quote", "trade", "settlementStatus",
+		"get_order_status", "market_analysis", "trade_recommendation", "price_prediction",
+		"detect_anomalies", "summarize_transactions",
+		"list_webhook_events", "create_webhook_subscription", "list_webhook_subscriptions", "trigger_test_webhook",
 		"createPaymentIntent", "getPaymentIntent",
+		// Phase 5+ agent self-service tools
+		"listAgentGrants", "getAgentPolicy", "dryRunCapability", "listAgentPaymentIntents",
 	}
 }
 
@@ -451,18 +452,16 @@ async function toggleSub(id, activate) {
 </html>`, deliveries, failures, activeSubs, eventOptions.String(), len(subs), rows.String())
 }
 
+// webhookEventList returns the canonical event names that webhook subscribers
+// can use. This must stay in sync with webhooks.AllEvents().
 func webhookEventList() []string {
-	return []string{
-		"*",
-		"payment.created", "payment.completed", "payment.failed",
-		"order.confirmed", "order.failed",
-		"crypto.sent", "crypto.confirmed",
-		"m2m.deposit.confirmed", "m2m.settled", "m2m.failed",
-		"agent.connected", "agent.policy.updated",
-		"marketplace.purchase.created", "marketplace.purchase.paid", "marketplace.purchase.failed",
-		"capability.executed", "capability.failed",
-		"trade.quote.created", "trade.settled", "trade.failed",
-	}
+	// Delegate to the single source of truth so the UI, API and dispatcher
+	// always expose the same set of subscribable events.
+	all := webhooks.AllEvents()
+	result := make([]string, 0, len(all)+1)
+	result = append(result, "*") // wildcard: subscribe to all events
+	result = append(result, all...)
+	return result
 }
 
 // ─── helper renderers / data ──────────────────────────────────────────────────

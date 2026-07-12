@@ -38,6 +38,17 @@ const (
 	EventPayoutSent      = "payout.sent"
 	EventPriceChange     = "price.change"
 	EventDCAExecuted     = "dca.executed"
+
+	// M2M agent payment lifecycle events
+	EventM2MIntentCreated  = "m2m.intent.created"
+	EventM2MDepositReceived = "m2m.deposit.received"
+	EventM2MSettlementDone  = "m2m.settlement.done"  // canonical name (was m2m.settled)
+	EventM2MSettlementFailed = "m2m.settlement.failed"
+
+	// Marketplace/capability lifecycle events
+	EventCapabilityPurchased = "capability.purchased"
+	EventCapabilityExecuted  = "capability.executed"
+	EventCapabilityGranted   = "capability.granted"
 )
 
 // AllEvents lists every trigger automation platforms can subscribe to.
@@ -50,6 +61,13 @@ func AllEvents() []string {
 		EventPayoutSent,
 		EventPriceChange,
 		EventDCAExecuted,
+		EventM2MIntentCreated,
+		EventM2MDepositReceived,
+		EventM2MSettlementDone,
+		EventM2MSettlementFailed,
+		EventCapabilityPurchased,
+		EventCapabilityExecuted,
+		EventCapabilityGranted,
 	}
 }
 
@@ -91,12 +109,15 @@ func New(db *database.DB, cfg *config.Config) *Dispatcher {
 }
 
 // busEventMapping translates an internal worker bus event type into zero or
-// more canonical automation triggers.
+// more canonical automation trigger names (as published to webhook subscribers).
+//
+// Rule: bus event names (internal) → canonical webhook event names (public).
+// Both sides must be kept in sync — add a row here whenever the workers.go
+// publishes a new event type, and add the canonical name to AllEvents().
 func busEventMapping(eventType string) []string {
 	switch eventType {
-	case "order.created":
-		return []string{EventOrderCreated}
-	case "buy.created":
+	// ── Order / buy lifecycle (existing) ──────────────────────────────────────
+	case "order.created", "buy.created":
 		return []string{EventOrderCreated}
 	case "buy.paid":
 		return []string{EventPaymentReceived}
@@ -110,6 +131,32 @@ func busEventMapping(eventType string) []string {
 		return []string{EventDCAExecuted}
 	case "order.failed", "buy.failed":
 		return []string{EventOrderFailed}
+
+	// ── M2M agent payment lifecycle ───────────────────────────────────────────
+	// Bus: "m2m.intent.created"     → Canonical: EventM2MIntentCreated
+	// Bus: "m2m.deposit.confirmed"  → Canonical: EventM2MDepositReceived
+	// Bus: "m2m.settlement.done"    → Canonical: EventM2MSettlementDone
+	// Bus: "m2m.settlement.failed"  → Canonical: EventM2MSettlementFailed
+	case "m2m.intent.created":
+		return []string{EventM2MIntentCreated}
+	case "m2m.deposit.confirmed":
+		return []string{EventM2MDepositReceived}
+	case "m2m.settlement.done":
+		return []string{EventM2MSettlementDone}
+	case "m2m.settlement.failed":
+		return []string{EventM2MSettlementFailed}
+
+	// ── Capability marketplace lifecycle ──────────────────────────────────────
+	// Bus: "marketplace.capability.purchased" → Canonical: EventCapabilityPurchased
+	// Bus: "marketplace.capability.granted"   → Canonical: EventCapabilityGranted
+	// Bus: "marketplace.capability.executed"  → Canonical: EventCapabilityExecuted
+	case "marketplace.capability.purchased":
+		return []string{EventCapabilityPurchased}
+	case "marketplace.capability.granted":
+		return []string{EventCapabilityGranted}
+	case "marketplace.capability.executed":
+		return []string{EventCapabilityExecuted}
+
 	default:
 		return nil
 	}
@@ -124,9 +171,16 @@ func (d *Dispatcher) Start(ctx context.Context, bus *workers.EventBus) {
 	}
 	d.queue.Start(ctx)
 	busTypes := []string{
+		// Order / buy lifecycle (existing)
 		"order.created", "buy.created", "buy.paid", "payout.settled",
 		"buy.sent", "sweep.sent", "price.updated", "dca.buy.requested",
 		"order.failed", "buy.failed",
+		// M2M agent payment lifecycle (new)
+		"m2m.intent.created", "m2m.deposit.confirmed",
+		"m2m.settlement.done", "m2m.settlement.failed",
+		// Capability marketplace lifecycle (new)
+		"marketplace.capability.purchased", "marketplace.capability.granted",
+		"marketplace.capability.executed",
 	}
 	for _, t := range busTypes {
 		ch := bus.Subscribe(t)

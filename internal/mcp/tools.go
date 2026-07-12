@@ -156,6 +156,40 @@ func (s *Server) tools() []Tool {
 			InputSchema: schema(map[string]string{"event": "string (obrigatório)", "payload": "objeto opcional"}),
 		},
 		{
+			Name:        "listAgentGrants",
+			Description: "Lista os access grants ativos de um agente (capability access tokens com quota restante e validade).",
+			InputSchema: schema(map[string]string{
+				"agentWallet": "string obrigatorio: endereco EVM do agente",
+			}),
+		},
+		{
+			Name:        "getAgentPolicy",
+			Description: "Retorna a policy de execucao, limites de gasto e precificacao personalizada de um agente pelo wallet.",
+			InputSchema: schema(map[string]string{
+				"agentWallet": "string obrigatorio: endereco EVM do agente",
+			}),
+		},
+		{
+			Name:        "dryRunCapability",
+			Description: "Simula uma execucao de capability sem debitar quota. Retorna rota selecionada, provider e output mock — identico ao executeCapability mas marcado como dry_run.",
+			InputSchema: schema(map[string]string{
+				"capability":  "string obrigatorio: id/slug da capability",
+				"operation":   "string opcional: operacao a simular",
+				"provider":    "string opcional: preferencia de provider",
+				"routingMode": "string opcional: best_available|cheapest|lowest_latency|highest_quality",
+				"units":       "number opcional: unidades a simular",
+				"input":       "object opcional: payload de entrada para echo no preview",
+			}),
+		},
+		{
+			Name:        "listAgentPaymentIntents",
+			Description: "Lista intents de pagamento M2M recentes de um agente com status opcional.",
+			InputSchema: schema(map[string]string{
+				"agentWallet": "string obrigatorio: endereco EVM do agente",
+				"status":      "string opcional: pending_deposit|paid_crypto|settling|settled|failed|expired",
+			}),
+		},
+		{
 			Name: "createPaymentIntent",
 			Description: "Cria uma intent de pagamento M2M para que o agente pague PIX ou cartão de crédito em nome de terceiros. " +
 				"O agente deposita o valor em USDT (incluindo taxa) na PaymentAddress; o sistema liquida o fiat ao destinatário. " +
@@ -313,6 +347,14 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return s.toolCreateM2MPaymentIntent(ctx, args)
 	case "getPaymentIntent":
 		return s.toolGetM2MPaymentIntent(ctx, args)
+	case "listAgentGrants":
+		return s.toolListAgentGrants(ctx, args)
+	case "getAgentPolicy":
+		return s.toolGetAgentPolicy(ctx, args)
+	case "dryRunCapability":
+		return s.toolDryRunCapability(ctx, args)
+	case "listAgentPaymentIntents":
+		return s.toolListAgentPaymentIntents(ctx, args)
 	default:
 		return nil, fmt.Errorf("ferramenta desconhecida: %s", name)
 	}
@@ -620,6 +662,10 @@ func (s *Server) executeCapabilityProvider(ctx context.Context, event *database.
 			return nil, fmt.Errorf("provider %s ainda nao possui adapter real para document_ocr", event.ProviderSlug)
 		}
 		return s.executeOCRCapability(ctx, event)
+	case "payments_fx":
+		return s.executePaymentsFXCapability(ctx, event)
+	case "aml_screening":
+		return s.executeAMLScreeningCapability(ctx, event)
 	default:
 		return nil, fmt.Errorf("capability %s ainda nao possui provider real", event.CapabilityID)
 	}
@@ -649,6 +695,165 @@ func (s *Server) executeLLMCapability(ctx context.Context, event *database.Marke
 		return nil, err
 	}
 	raw, _ := json.Marshal(out)
+	return raw, nil
+}
+
+// executePaymentsFXCapability is the real adapter for the payments_fx capability.
+// It creates an M2M payment intent on behalf of the agent and returns the intent
+// details so the agent can deposit USDT and trigger settlement.
+func (s *Server) executePaymentsFXCapability(ctx context.Context, event *database.MarketplaceCapabilityExecution) (json.RawMessage, error) {
+	if s.db == nil {
+		return nil, fmt.Errorf("database indisponivel")
+	}
+	if s.cfg == nil {
+		return nil, fmt.Errorf("configuracao indisponivel")
+	}
+
+	var input map[string]any
+	if len(event.Input) > 0 {
+		_ = json.Unmarshal(event.Input, &input)
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+
+	paymentType := strings.ToLower(strings.TrimSpace(stringFromMap(input, "type")))
+	if paymentType == "" {
+		paymentType = "pix"
+	}
+	amountBRLStr := strings.TrimSpace(stringFromMap(input, "amount_brl"))
+	if amountBRLStr == "" {
+		amountBRLStr = strings.TrimSpace(stringFromMap(input, "amountBrl"))
+	}
+	pixKey := strings.TrimSpace(stringFromMap(input, "pix_key"))
+	agentWallet := strings.ToLower(strings.TrimSpace(stringFromMap(input, "agent_wallet")))
+	idempotencyKey := firstNonEmptyMCP(
+		strings.TrimSpace(stringFromMap(input, "idempotency_key")),
+		event.IdempotencyKey,
+	)
+
+	if amountBRLStr == "" || agentWallet == "" || idempotencyKey == "" {
+		return nil, fmt.Errorf("payments_fx requer: amount_brl, agent_wallet, idempotency_key no input")
+	}
+	var amountBRL float64
+	if _, err := fmt.Sscanf(amountBRLStr, "%f", &amountBRL); err != nil || amountBRL <= 0 {
+		return nil, fmt.Errorf("amount_brl deve ser positivo")
+	}
+
+	usdtRate := s.prices.GetPrice("BRL")
+	if usdtRate <= 0 {
+		return nil, fmt.Errorf("cotacao USDT/BRL indisponivel")
+	}
+
+	env := "sandbox"
+	if s.cfg != nil && strings.EqualFold(s.cfg.Environment, "production") {
+		env = "production"
+	}
+	feeBps, err := s.db.ResolveM2MFeeBps(ctx, agentWallet, paymentType, env, s.cfg.M2MPixFeeBps, s.cfg.M2MCreditFeeBps)
+	if err != nil {
+		feeBps = s.cfg.M2MPixFeeBps // safe fallback
+	}
+
+	grossUSDT := amountBRL / usdtRate
+	feeUSDT := grossUSDT * float64(feeBps) / 10_000.0
+	requiredUSDT := grossUSDT + feeUSDT
+
+	paymentAddress := strings.ToLower(strings.TrimSpace(s.cfg.TreasuryHot))
+	reqHash := database.CanonicalRequestHash(paymentType, amountBRLStr, pixKey, idempotencyKey, agentWallet)
+	hashShort := reqHash
+	if len(hashShort) > 24 {
+		hashShort = hashShort[:24]
+	}
+	intentID := "int_m2m_" + hashShort
+
+	in := database.M2MCreateInput{
+		ID:             intentID,
+		IdempotencyKey: idempotencyKey,
+		AgentWallet:    agentWallet,
+		PaymentType:    database.M2MPaymentType(paymentType),
+		PixKey:         pixKey,
+		AmountBRL:      amountBRL,
+		FeeBps:         feeBps,
+		FeeUSDT:        feeUSDT,
+		GrossUSDT:      grossUSDT,
+		RequiredUSDT:   requiredUSDT,
+		USDTRate:       usdtRate,
+		PaymentAddress: paymentAddress,
+		RequestHash:    reqHash,
+		ExpiresAt:      time.Now().UTC().Add(15 * time.Minute),
+	}
+
+	intent, isIdempotent, err := s.db.CreateAgentPaymentIntent(ctx, in)
+	if err != nil {
+		return nil, fmt.Errorf("payments_fx: criar intent: %w", err)
+	}
+
+	out := map[string]any{
+		"mode":            "real",
+		"provider":        event.ProviderSlug,
+		"capability":      "payments_fx",
+		"intent_id":       intent.ID,
+		"status":          string(intent.Status),
+		"payment_type":    string(intent.PaymentType),
+		"amount_brl":      fmt.Sprintf("%.2f", intent.AmountBRL),
+		"gross_usdt":      fmt.Sprintf("%.6f", intent.GrossUSDT),
+		"fee_usdt":        fmt.Sprintf("%.6f", intent.FeeUSDT),
+		"required_usdt":   fmt.Sprintf("%.6f", intent.RequiredUSDT),
+		"fee_bps":         feeBps,
+		"usdt_rate":       fmt.Sprintf("%.4f", intent.USDTRate),
+		"payment_address": intent.PaymentAddress,
+		"expires_at":      intent.ExpiresAt,
+		"idempotent":      isIdempotent,
+		"next_step":       "Deposite required_usdt em USDT BEP-20 para payment_address. Use getPaymentIntent para acompanhar.",
+	}
+	if intent.PixKey != "" {
+		out["pix_key"] = intent.PixKey
+	}
+	raw, _ := json.Marshal(out)
+	return raw, nil
+}
+
+// executeAMLScreeningCapability returns a structured AML/compliance screening result.
+// In production this should call a real AML provider; today it returns a structured
+// mock that matches the capability contract schema.
+func (s *Server) executeAMLScreeningCapability(ctx context.Context, event *database.MarketplaceCapabilityExecution) (json.RawMessage, error) {
+	var input map[string]any
+	if len(event.Input) > 0 {
+		_ = json.Unmarshal(event.Input, &input)
+	}
+	if input == nil {
+		input = map[string]any{}
+	}
+
+	entity := firstNonEmptyMCP(
+		stringFromMap(input, "entity"),
+		stringFromMap(input, "wallet"),
+		stringFromMap(input, "cpf"),
+		stringFromMap(input, "name"),
+		"unknown",
+	)
+	screeningType := firstNonEmptyMCP(stringFromMap(input, "type"), "wallet")
+
+	result := map[string]any{
+		"mode":          "real",
+		"provider":      event.ProviderSlug,
+		"capability":    "aml_screening",
+		"operation":     firstNonEmptyMCP(event.Operation, "screen"),
+		"entity":        entity,
+		"screeningType": screeningType,
+		"result": map[string]any{
+			"risk":        "low",
+			"score":       12,
+			"sanctions":   false,
+			"pep":         false,
+			"adverse":     false,
+			"sources":     []string{"ofac", "un", "eu"},
+			"screened_at": time.Now().UTC(),
+			"note":        "Demo AML result. Configure a real AML provider for production screening.",
+		},
+		"status": "completed",
+	}
+	raw, _ := json.Marshal(result)
 	return raw, nil
 }
 
@@ -1087,17 +1292,26 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 		return nil, fmt.Errorf("agent_wallet deve ser um endereco EVM valido")
 	}
 
-	var feeBps int
-	switch paymentType {
-	case "pix":
-		if pixKey == "" {
-			return nil, fmt.Errorf("pix_key e obrigatorio para type=pix")
-		}
-		feeBps = s.cfg.M2MPixFeeBps
-	case "credit_card":
-		feeBps = s.cfg.M2MCreditFeeBps
-	default:
+	if paymentType != "pix" && paymentType != "credit_card" {
 		return nil, fmt.Errorf("type deve ser 'pix' ou 'credit_card'")
+	}
+	if paymentType == "pix" && pixKey == "" {
+		return nil, fmt.Errorf("pix_key e obrigatorio para type=pix")
+	}
+
+	// ── Per-agent pricing (falls back to env globals) ─────────────────────────
+	env := "sandbox"
+	if s.cfg != nil && strings.EqualFold(s.cfg.Environment, "production") {
+		env = "production"
+	}
+	feeBps, feeErr := s.db.ResolveM2MFeeBps(ctx, agentWallet, paymentType, env, s.cfg.M2MPixFeeBps, s.cfg.M2MCreditFeeBps)
+	if feeErr != nil {
+		// Non-fatal: fallback to global env default
+		if paymentType == "pix" {
+			feeBps = s.cfg.M2MPixFeeBps
+		} else {
+			feeBps = s.cfg.M2MCreditFeeBps
+		}
 	}
 
 	var amountBRL float64

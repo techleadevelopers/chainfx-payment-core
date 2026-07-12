@@ -85,6 +85,14 @@ func (s *Server) Handler() http.Handler {
 	// M2M agent payments: PIX + credit-card on behalf of AI agents
 	mux.HandleFunc("POST /agent/v1/pay", s.handleM2MCreateIntent)
 	mux.HandleFunc("GET /agent/v1/pay/{id}", s.handleM2MGetIntent)
+	// Agent pricing policy (per-agent fee overrides)
+	mux.HandleFunc("GET /agent/pricing/{wallet}", s.handleGetAgentPricingPolicy)
+	// Detail pages
+	mux.HandleFunc("GET /app/intent/{id}", s.handleAppIntentDetail)
+	// Risk / settlement operational dashboard
+	mux.HandleFunc("GET /app/risk", s.handleAppRisk)
+	// Public MCP capability registry (machine-readable JSON)
+	mux.HandleFunc("GET /mcp/capabilities.json", s.handleMCPCapabilityRegistry)
 	mux.HandleFunc("GET /openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("GET /rates", s.handleChainFXRates)
 	mux.HandleFunc("POST /quote", s.handleChainFXQuote)

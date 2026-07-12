@@ -62,14 +62,74 @@ SIGNER_URL=...
 
 ## Phase 5 DB migration
 
-After setting `DATABASE_URL`, apply the Phase 5 schema:
+After setting `DATABASE_URL`, apply schemas in order:
 
 ```bash
 psql $DATABASE_URL -f schema.sql
 psql $DATABASE_URL -f schema_phase5.sql
+psql $DATABASE_URL -f schema_agent_pricing.sql   # per-agent pricing policies
 ```
+
+## MCP Capability Layer
+
+ChainFX exposes a full **Model Context Protocol (MCP)** server at `/mcp/*`.
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /mcp/initialize` | Handshake / protocol version |
+| `POST /mcp/tools/list` | All 30 tools (capabilities, payments, AI, webhooks) |
+| `POST /mcp/tools/call` | Execute any tool |
+| `POST /mcp/resources/list` | Resources (rates, capabilities, grants, policy, intents) |
+| `POST /mcp/resources/read` | Read a resource by URI |
+| `GET /mcp/test` | Connection health check |
+| `GET /mcp/capabilities.json` | Public machine-readable capability registry |
+
+### MCP Tools (production-ready)
+
+**Capability Marketplace**: `listCapabilities`, `searchCapabilities`, `getCapability`, `getCapabilityContract`, `purchaseCapability`, `getPurchase`, `executeCapability`, `chooseRoute`, `getUsage`
+
+**Agent Self-Service** *(new)*: `listAgentGrants`, `getAgentPolicy`, `dryRunCapability`, `listAgentPaymentIntents`
+
+**M2M Payments**: `createPaymentIntent`, `getPaymentIntent` — PIX (real) with per-agent fee overrides
+
+**Agent Rail**: `listAssets`, `quote`, `trade`, `settlementStatus`
+
+**AI Analysis**: `market_analysis`, `trade_recommendation`, `price_prediction`, `detect_anomalies`, `summarize_transactions`
+
+**Webhooks**: `list_webhook_events`, `create_webhook_subscription`, `list_webhook_subscriptions`, `trigger_test_webhook`
+
+### Real Capability Adapters
+
+| Capability | Provider | Status |
+|------------|----------|--------|
+| `semantic_memory` | Native PostgreSQL | ✅ Real |
+| `llm_chat` | OpenAI (when `OPENAI_API_KEY` set) | ✅ Real |
+| `document_ocr` | HTTP adapter (when `CAPABILITY_OCR_URL` set) | ✅ Real |
+| `payments_fx` | M2M PIX/credit-card via Efí | ✅ Real |
+| `aml_screening` | Structured mock (real provider TBD) | ⚠️ Demo |
+
+### Per-Agent Pricing
+
+Table `agent_pricing_policies` allows per-wallet fee overrides for M2M PIX, credit-card and capability take-rate. Null fields fall back to env-var globals.
+
+### New Operational Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /app/intent/{id}` | M2M payment intent detail |
+| `GET /app/risk` | M2M risk/settlement dashboard |
+| `GET /agent/pricing/{wallet}` | Per-agent pricing policy |
+| `GET /mcp/capabilities.json` | Public capability registry |
+
+### Webhook Events
+
+M2M lifecycle: `m2m.intent.created`, `m2m.deposit.received`, `m2m.settlement.done`, `m2m.settlement.failed`
+
+Capability lifecycle: `capability.purchased`, `capability.executed`, `capability.granted`
 
 ## User preferences
 
 - Keep mobile API isolated under `/api/mobile/` — never break existing web API routes
 - Phase 5 is mobile-only; web API additions belong in `internal/server/`
+- MCP tools must remain backward-compatible — never remove existing tool names
+- Per-agent pricing overrides always fall back to env-var globals (never error)

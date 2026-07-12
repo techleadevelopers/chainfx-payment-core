@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/workers"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -274,6 +275,22 @@ func (s *Server) handleMarketplaceCapabilityPurchase(w http.ResponseWriter, r *h
 		"routingMode": capability.RoutingMode,
 		"providers":   capability.Providers,
 	}
+
+	// Publish capability.purchased lifecycle event
+	if s.workers != nil {
+		s.workers.Bus.Publish(workers.Event{
+			Type:    "marketplace.capability.purchased",
+			OrderID: purchase.ID,
+			Payload: map[string]any{
+				"purchase_id":   purchase.ID,
+				"capability_id": capability.ID,
+				"agent_wallet":  req.AgentWallet,
+				"plan_id":       plan.ID,
+				"payment_asset": req.PaymentAsset,
+			},
+		})
+	}
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -348,6 +365,21 @@ func (s *Server) handleMarketplacePurchaseExecute(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
+
+	// Publish capability.granted lifecycle event (on-chain payment confirmed, grant active)
+	if s.workers != nil {
+		s.workers.Bus.Publish(workers.Event{
+			Type:    "marketplace.capability.granted",
+			OrderID: purchase.ID,
+			Payload: map[string]any{
+				"purchase_id":  purchase.ID,
+				"tx_hash":      req.TxHash,
+				"agent_wallet": purchase.AgentWallet,
+				"plan_id":      purchase.PlanID,
+			},
+		})
+	}
+
 	writeJSON(w, http.StatusOK, marketplaceActivationResponse(result))
 }
 
@@ -411,6 +443,22 @@ func (s *Server) handleMarketplaceCapabilityUsage(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusPaymentRequired, map[string]any{"error": err.Error()})
 		return
 	}
+
+	// Publish capability.executed lifecycle event (quota deducted, not a duplicate)
+	if !duplicate && s.workers != nil {
+		s.workers.Bus.Publish(workers.Event{
+			Type:    "marketplace.capability.executed",
+			OrderID: req.RequestID,
+			Payload: map[string]any{
+				"capability_id":   capability.ID,
+				"grant_id":        grant.ID,
+				"units":           req.Units,
+				"quota_remaining": grant.QuotaRemaining,
+				"request_id":      req.RequestID,
+			},
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":             true,
 		"duplicate":      duplicate,

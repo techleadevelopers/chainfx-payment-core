@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/workers"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -71,19 +72,31 @@ func (s *Server) handleM2MCreateIntent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var feeBps int
 	switch req.Type {
 	case "pix":
 		if req.PixKey == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pix_key is required for type=pix"})
 			return
 		}
-		feeBps = s.cfg.M2MPixFeeBps
 	case "credit_card":
-		feeBps = s.cfg.M2MCreditFeeBps
+		// valid — no extra validation needed
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "type must be 'pix' or 'credit_card'"})
 		return
+	}
+
+	// ── Per-agent pricing (falls back to global env vars) ─────────────────────
+	env := "sandbox"
+	if strings.EqualFold(s.cfg.Environment, "production") {
+		env = "production"
+	}
+	feeBps, feeErr := s.db.ResolveM2MFeeBps(r.Context(), req.AgentWallet, req.Type, env, s.cfg.M2MPixFeeBps, s.cfg.M2MCreditFeeBps)
+	if feeErr != nil {
+		if req.Type == "pix" {
+			feeBps = s.cfg.M2MPixFeeBps
+		} else {
+			feeBps = s.cfg.M2MCreditFeeBps
+		}
 	}
 
 	amountBRL, err := parsePositiveFloat(req.AmountBRL)
@@ -155,6 +168,22 @@ func (s *Server) handleM2MCreateIntent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to create intent"})
 		return
+	}
+
+	// ── Publish lifecycle event (new intent only, not idempotent replays) ─────
+	if !isIdempotent && s.workers != nil {
+		s.workers.Bus.Publish(workers.Event{
+			Type:    "m2m.intent.created",
+			OrderID: intent.ID,
+			Payload: map[string]any{
+				"intent_id":    intent.ID,
+				"agent_wallet": intent.AgentWallet,
+				"payment_type": string(intent.PaymentType),
+				"amount_brl":   intent.AmountBRL,
+				"fee_bps":      intent.FeeBps,
+				"expires_at":   intent.ExpiresAt,
+			},
+		})
 	}
 
 	statusCode := http.StatusCreated

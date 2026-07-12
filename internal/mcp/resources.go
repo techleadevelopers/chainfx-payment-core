@@ -25,9 +25,13 @@ func (s *Server) resources() []Resource {
 		{URI: "chainfx://capability-contracts/{id}", Name: "Capability Contract", Description: "Versioned input/output contract for a capability. Replace {id} with document_ocr, llm_chat, etc.", MimeType: "application/json"},
 		{URI: "chainfx://marketplace/products", Name: "Marketplace Products", Description: "Premium marketplace products and plans kept for product-level compatibility.", MimeType: "application/json"},
 		{URI: "chainfx://agent/assets", Name: "Agent Rail Assets", Description: "Stablecoin assets enabled for Agent Rail and capability payments.", MimeType: "application/json"},
-		{URI: "chainfx://webhooks/events", Name: "Automation events", Description: "Automation webhook events available to n8n/Zapier/Make.", MimeType: "application/json"},
+		{URI: "chainfx://webhooks/events", Name: "Automation events", Description: "Automation webhook events available to n8n/Zapier/Make including M2M and capability lifecycle events.", MimeType: "application/json"},
 		{URI: "chainfx://webhooks/subscriptions", Name: "Webhook subscriptions", Description: "Currently configured automation subscriptions.", MimeType: "application/json"},
 		{URI: "chainfx://orders/{id}", Name: "Order by id", Description: "Details for a buy/sell order. Replace {id} with the real id.", MimeType: "application/json"},
+		{URI: "chainfx://agent/grants/{wallet}", Name: "Agent active grants", Description: "Active access grants (capability tokens with quota) for an agent wallet. Replace {wallet} with EVM address.", MimeType: "application/json"},
+		{URI: "chainfx://agent/policy/{wallet}", Name: "Agent policy", Description: "Execution policy, spend limits and pricing overrides for an agent wallet. Replace {wallet} with EVM address.", MimeType: "application/json"},
+		{URI: "chainfx://agent/intents/{wallet}", Name: "Agent payment intents", Description: "Recent M2M payment intents for an agent wallet. Replace {wallet} with EVM address.", MimeType: "application/json"},
+		{URI: "chainfx://mcp/registry", Name: "MCP Capability Registry", Description: "Machine-readable capability catalog for MCP client discovery.", MimeType: "application/json"},
 	}
 }
 
@@ -82,6 +86,17 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 	case strings.HasPrefix(uri, "chainfx://orders/"):
 		id := strings.TrimPrefix(uri, "chainfx://orders/")
 		return s.toolGetOrderStatus(ctx, map[string]any{"orderId": id})
+	case strings.HasPrefix(uri, "chainfx://agent/grants/"):
+		wallet := strings.TrimPrefix(uri, "chainfx://agent/grants/")
+		return s.toolListAgentGrants(ctx, map[string]any{"agentWallet": wallet})
+	case strings.HasPrefix(uri, "chainfx://agent/policy/"):
+		wallet := strings.TrimPrefix(uri, "chainfx://agent/policy/")
+		return s.toolGetAgentPolicy(ctx, map[string]any{"agentWallet": wallet})
+	case strings.HasPrefix(uri, "chainfx://agent/intents/"):
+		wallet := strings.TrimPrefix(uri, "chainfx://agent/intents/")
+		return s.toolListAgentPaymentIntents(ctx, map[string]any{"agentWallet": wallet})
+	case uri == "chainfx://mcp/registry":
+		return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
 	default:
 		return nil, fmt.Errorf("recurso desconhecido: %s", uri)
 	}

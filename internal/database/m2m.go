@@ -318,6 +318,43 @@ func (db *DB) MarkM2MFailed(ctx context.Context, tx *sql.Tx, intentID, errMsg st
 	return tx.Commit()
 }
 
+// ListAgentPaymentIntentsByWallet returns recent payment intents for a given agent wallet.
+func (db *DB) ListAgentPaymentIntentsByWallet(ctx context.Context, wallet, statusFilter string, limit int) ([]AgentPaymentIntent, error) {
+	wallet = strings.ToLower(strings.TrimSpace(wallet))
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	args := []any{wallet, limit}
+	where := "lower(agent_wallet) = $1"
+	if s := strings.TrimSpace(statusFilter); s != "" {
+		args = []any{wallet, s, limit}
+		where = "lower(agent_wallet) = $1 AND status = $2"
+	}
+	const qBase = `
+SELECT id, idempotency_key, agent_wallet, payment_type, pix_key,
+       amount_brl, fee_bps, fee_usdt, gross_usdt, required_usdt, usdt_rate,
+       payment_address, status, deposit_tx, deposit_amount_usdt,
+       efi_end_to_end_id, efi_status, error_message, attempts,
+       request_hash, expires_at, settled_at, created_at, updated_at
+FROM   agent_payment_intents
+WHERE  `
+	limitIdx := len(args)
+	rows, err := db.SQL.QueryContext(ctx, qBase+where+fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", limitIdx), args...)
+	if err != nil {
+		return nil, fmt.Errorf("m2m: list by wallet: %w", err)
+	}
+	defer rows.Close()
+	var out []AgentPaymentIntent
+	for rows.Next() {
+		intent, err := scanIntentFullRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *intent)
+	}
+	return out, rows.Err()
+}
+
 // GetPaidCryptoIntents returns intents ready for fiat settlement (up to 50 at a time).
 func (db *DB) GetPaidCryptoIntents(ctx context.Context) ([]AgentPaymentIntent, error) {
 	const q = `
