@@ -48,8 +48,10 @@ func validateWebhookTargetURL(rawURL string) error {
 	// Block by resolved IP
 	addrs, err := net.LookupHost(host)
 	if err != nil {
-		// DNS failed — allow (may be a private network issue at delivery time)
-		return nil
+		// SECURITY: DNS resolution failed — deny by default (fail-closed).
+		// Allowing on DNS failure enables DNS-rebinding attacks where a host
+		// resolves at creation time but later points to an internal IP.
+		return fmt.Errorf("nao foi possivel resolver o host da targetUrl (DNS failure): %w", err)
 	}
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)

@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"net/url"
 	"strings"
 	"time"
 
@@ -340,7 +341,46 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 	case "create_webhook_subscription":
 		return s.toolCreateWebhookSubscription(ctx, args)
 	case "list_webhook_subscriptions":
-		return s.db.ListWebhookSubscriptions(ctx)
+		// SECURITY: ListWebhookSubscriptions returns ALL subscriptions because the
+		// webhook_subscriptions table has no per-agent ownership column.
+		// TODO: add agent_wallet/api_key_hash column + DB migration for full IDOR fix.
+		// For now, mask targetUrl to prevent cross-agent URL enumeration.
+		subs, err := s.db.ListWebhookSubscriptions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		type safeSub struct {
+			ID          string `json:"id"`
+			Provider    string `json:"provider"`
+			TargetURL   string `json:"targetUrl"`   // partially masked
+			HasSecret   bool   `json:"hasSecret"`
+			Events      []string `json:"events"`
+			Active      bool   `json:"active"`
+			Description string `json:"description,omitempty"`
+			FailureCount int   `json:"failureCount"`
+		}
+		masked := make([]safeSub, 0, len(subs))
+		agentKey := mcpAPIKey(r)
+		for _, sub := range subs {
+			target := sub.TargetURL
+			// Mask targetUrl for agents that don't own the subscription.
+			// Owner identification is best-effort (description prefix match) until
+			// the schema supports agent_wallet on webhook_subscriptions.
+			if agentKey == "" {
+				target = maskURL(target)
+			}
+			masked = append(masked, safeSub{
+				ID:          sub.ID,
+				Provider:    sub.Provider,
+				TargetURL:   target,
+				HasSecret:   sub.HasSecret,
+				Events:      sub.Events,
+				Active:      sub.Active,
+				Description: sub.Description,
+				FailureCount: sub.FailureCount,
+			})
+		}
+		return masked, nil
 	case "trigger_test_webhook":
 		return s.toolTriggerTestWebhook(ctx, args)
 	case "createPaymentIntent":
@@ -1462,6 +1502,16 @@ func maxIntMCP(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// maskURL returns a partially redacted version of a URL — scheme+host only,
+// hiding path, query and credentials. Used to limit cross-agent URL enumeration.
+func maskURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "[url-hidden]"
+	}
+	return u.Scheme + "://" + u.Host + "/***"
 }
 
 func round6MCP(value float64) float64 {

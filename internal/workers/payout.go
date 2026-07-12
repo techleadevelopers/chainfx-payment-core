@@ -53,7 +53,14 @@ func (pw *PayoutWorker) Start(ctx context.Context) {
 			if !ok {
 				return
 			}
-			go pw.processPayout(ctx, event)
+			go func(e Event) {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("PayoutWorker: panic em processPayout", "recover", r)
+					}
+				}()
+				pw.processPayout(ctx, e)
+			}(event)
 		}
 	}
 }

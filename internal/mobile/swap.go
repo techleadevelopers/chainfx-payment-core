@@ -8,6 +8,7 @@ package mobile
 //	GET  /api/mobile/swaps         — list user's swaps
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -116,7 +117,8 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 	swap, err := db.CreateSwap(r.Context(), uid, req.FromAsset, req.ToAsset,
 		req.Amount, req.Slippage, defaultSwapFeeBPS)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 
@@ -143,7 +145,8 @@ func (s *Server) handleGetSwap(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	swap, err := mobileDB(s.db).GetSwap(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	if swap == nil || swap.UserID != uid {
@@ -158,7 +161,8 @@ func (s *Server) handleListSwaps(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	swaps, err := mobileDB(s.db).ListSwapsByUser(r.Context(), uid, 20)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	if swaps == nil {

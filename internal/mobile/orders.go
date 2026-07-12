@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -156,7 +157,8 @@ func (s *Server) handleMobileListOrders(w http.ResponseWriter, r *http.Request) 
 	uid := userIDFromCtx(r)
 	orders, err := mobileDB(s.db).ListOrdersByUser(r.Context(), uid, 20)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders, "count": len(orders)})

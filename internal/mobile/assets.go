@@ -7,6 +7,7 @@ package mobile
 //	GET  /api/mobile/assets/{symbol}/rate — live price in BRL/USD
 
 import (
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,7 +17,8 @@ import (
 func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 	assets, err := mobileDB(s.db).ListAssets(r.Context(), true)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 
@@ -56,7 +58,8 @@ func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 	asset, err := mobileDB(s.db).GetAsset(r.Context(), symbol)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	if asset == nil {
@@ -73,7 +76,8 @@ func (s *Server) handleGetAssetRate(w http.ResponseWriter, r *http.Request) {
 
 	asset, err := mobileDB(s.db).GetAsset(r.Context(), symbol)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	if asset == nil {

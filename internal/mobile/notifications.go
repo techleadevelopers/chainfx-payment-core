@@ -1,13 +1,17 @@
 package mobile
 
-import "net/http"
+import (
+	"log/slog"
+	"net/http"
+)
 
 // handleListNotifications — GET /api/mobile/notifications
 func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	list, err := mobileDB(s.db).ListNotifications(r.Context(), uid, 50)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": list, "count": len(list)})
@@ -21,7 +25,8 @@ func (s *Server) handleMarkNotificationsRead(w http.ResponseWriter, r *http.Requ
 	}
 	_ = decodeJSON(r, &req)
 	if err := mobileDB(s.db).MarkNotificationsRead(r.Context(), uid, req.IDs); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -32,7 +37,8 @@ func (s *Server) handleDeleteNotification(w http.ResponseWriter, r *http.Request
 	uid := userIDFromCtx(r)
 	id := r.PathValue("id")
 	if err := mobileDB(s.db).DeleteNotification(r.Context(), uid, id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -56,7 +62,8 @@ func (s *Server) handleRegisterPushToken(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := mobileDB(s.db).UpsertDevice(r.Context(), uid, req.DeviceName, req.DeviceType, req.FCMToken, req.APNSToken); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

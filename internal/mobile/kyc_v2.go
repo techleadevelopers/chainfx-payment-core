@@ -11,6 +11,7 @@ package mobile
 //	GET  /api/mobile/kyc/limits         — current daily limits per KYC level
 
 import (
+	"log/slog"
 	"net/http"
 
 	"payment-gateway/internal/models"
@@ -73,7 +74,8 @@ func (s *Server) handleKYCSubmit(w http.ResponseWriter, r *http.Request) {
 		nullableStr(req.ProofIncURL),
 	)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 
@@ -103,7 +105,8 @@ func (s *Server) handleKYCStatusV2(w http.ResponseWriter, r *http.Request) {
 
 	approvedLevel, err := db.GetApprovedKYCLevel(r.Context(), uid)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 
@@ -129,7 +132,8 @@ func (s *Server) handleKYCHistory(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	list, err := mobileDB(s.db).ListKYCByUser(r.Context(), uid)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 	if list == nil {

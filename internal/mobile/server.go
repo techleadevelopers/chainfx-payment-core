@@ -25,10 +25,32 @@ type MobileConfig struct {
 }
 
 func loadMobileConfig() *MobileConfig {
+	const (
+		defaultJWTSecret     = "change_me_at_least_32_chars_secret"
+		defaultRefreshSecret = "change_me_refresh_secret_32chars"
+	)
+	jwtSecret := envOr("MOBILE_JWT_SECRET", envOr("JWT_SECRET", defaultJWTSecret))
+	refreshSecret := envOr("MOBILE_REFRESH_SECRET", envOr("JWT_SECRET", defaultRefreshSecret))
+
+	// SECURITY: refuse to start with insecure default secrets in production.
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	isProduction := appEnv == "production" || appEnv == "prod"
+	if isProduction && (jwtSecret == defaultJWTSecret || refreshSecret == defaultRefreshSecret) {
+		panic("FATAL: MOBILE_JWT_SECRET e MOBILE_REFRESH_SECRET devem ser definidos em producao. " +
+			"Nunca use os valores padrao em ambiente real.")
+	}
+	if jwtSecret == defaultJWTSecret || refreshSecret == defaultRefreshSecret {
+		_, _ = os.Stderr.WriteString("[SECURITY WARNING] MOBILE_JWT_SECRET/MOBILE_REFRESH_SECRET estao usando " +
+			"valores padrao inseguros. Defina as variaveis de ambiente antes de ir para producao.\n")
+	}
+	if len(jwtSecret) < 32 {
+		panic("FATAL: MOBILE_JWT_SECRET deve ter pelo menos 32 caracteres.")
+	}
+
 	return &MobileConfig{
-		JWTSecret:            envOr("MOBILE_JWT_SECRET", envOr("JWT_SECRET", "change_me_at_least_32_chars_secret")),
+		JWTSecret:            jwtSecret,
 		JWTExpiresMin:        envInt("MOBILE_JWT_EXPIRES_MIN", 15),
-		RefreshSecret:        envOr("MOBILE_REFRESH_SECRET", envOr("JWT_SECRET", "change_me_refresh_secret_32chars")),
+		RefreshSecret:        refreshSecret,
 		RefreshExpiresDays:   envInt("MOBILE_REFRESH_EXPIRES_DAYS", 7),
 		FCMServerKey:         envOr("FCM_SERVER_KEY", ""),
 		MobileAllowedOrigins: envOr("ALLOWED_ORIGINS", "*"),
@@ -133,9 +155,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mobile/notifications/token", s.requireAuth(s.handleRegisterPushToken))
 
 	// ── WebSocket ─────────────────────────────────────────────────────────────
-	mux.HandleFunc("/api/mobile/ws/orders", s.handleWSOrders)
+	// WebSocket routes: price feed is public; order/notification feeds require a valid JWT.
+	mux.HandleFunc("/api/mobile/ws/orders", s.requireAuth(s.handleWSOrders))
 	mux.HandleFunc("/api/mobile/ws/price", s.handleWSPrice)
-	mux.HandleFunc("/api/mobile/ws/notifications", s.handleWSNotifications)
+	mux.HandleFunc("/api/mobile/ws/notifications", s.requireAuth(s.handleWSNotifications))
 
 	// ── Settings ──────────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/mobile/settings", s.requireAuth(s.handleGetSettings))
@@ -160,7 +183,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mobile/kyc/submit", s.requireAuth(s.handleKYCSubmit))
 	mux.HandleFunc("GET /api/mobile/kyc/status", s.requireAuth(s.handleKYCStatusV2))
 	mux.HandleFunc("GET /api/mobile/kyc/history", s.requireAuth(s.handleKYCHistory))
-	mux.HandleFunc("GET /api/mobile/kyc/limits", s.handleKYCLimits)
+	mux.HandleFunc("GET /api/mobile/kyc/limits", s.requireAuth(s.handleKYCLimits))
 
 	// ── Phase 5: Swap (crypto→crypto) ────────────────────────────────────────
 	mux.HandleFunc("POST /api/mobile/swap/quote", s.requireAuth(s.handleSwapQuote))

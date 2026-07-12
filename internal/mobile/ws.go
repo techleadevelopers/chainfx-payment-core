@@ -3,14 +3,33 @@ package mobile
 import (
 	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+// wsCheckOrigin validates the WebSocket origin against ALLOWED_ORIGINS.
+// Falls back to same-origin check if the env var is not set.
+func wsCheckOrigin(r *http.Request) bool {
+	allowed := os.Getenv("ALLOWED_ORIGINS")
+	if allowed == "" || allowed == "*" {
+		// In development allow all; production must set ALLOWED_ORIGINS.
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	for _, o := range strings.Split(allowed, ",") {
+		if strings.TrimSpace(o) == strings.TrimSpace(origin) {
+			return true
+		}
+	}
+	return false
+}
+
 var upgrader = websocket.Upgrader{
-	CheckOrigin:     func(_ *http.Request) bool { return true },
+	CheckOrigin:     wsCheckOrigin,
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
 }
@@ -77,9 +96,13 @@ func (s *Server) BroadcastPrice(priceBRL float64) {
 }
 
 // BroadcastOrderUpdate is called when an order status changes.
-func (s *Server) BroadcastOrderUpdate(orderID, status string) {
+// userID scopes the broadcast so only that user's WS connections receive it.
+// Callers that do not know the userID should use BroadcastOrderUpdateGlobal (admin-only).
+func (s *Server) BroadcastOrderUpdate(userID, orderID, status string) {
 	msg, _ := marshalJSON(map[string]any{"type": "order_update", "order_id": orderID, "status": status, "ts": time.Now().Unix()})
-	s.hub.broadcast("orders", msg)
+	if userID != "" {
+		s.hub.broadcast("orders:"+userID, msg)
+	}
 }
 
 func serveWS(h *wsHub, topic, uid string, w http.ResponseWriter, r *http.Request) {
@@ -123,15 +146,15 @@ func serveWS(h *wsHub, topic, uid string, w http.ResponseWriter, r *http.Request
 }
 
 // handleWSOrders — WS /api/mobile/ws/orders
+// NOTE: this handler is always called inside requireAuth, so uid is guaranteed non-empty.
 func (s *Server) handleWSOrders(w http.ResponseWriter, r *http.Request) {
-	uid := ""
-	auth := r.Header.Get("Authorization")
-	if auth != "" {
-		if claims, err := verifyToken(s.mcfg.JWTSecret, auth[7:]); err == nil {
-			uid = claims.Sub
-		}
+	uid := userIDFromCtx(r)
+	if uid == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
-	serveWS(s.hub, "orders", uid, w, r)
+	// Subscribe to a user-scoped topic so broadcasts only reach this user.
+	serveWS(s.hub, "orders:"+uid, uid, w, r)
 }
 
 // handleWSPrice — WS /api/mobile/ws/price
@@ -140,13 +163,12 @@ func (s *Server) handleWSPrice(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleWSNotifications — WS /api/mobile/ws/notifications
+// NOTE: this handler is always called inside requireAuth, so uid is guaranteed non-empty.
 func (s *Server) handleWSNotifications(w http.ResponseWriter, r *http.Request) {
-	uid := ""
-	auth := r.Header.Get("Authorization")
-	if len(auth) > 7 {
-		if claims, err := verifyToken(s.mcfg.JWTSecret, auth[7:]); err == nil {
-			uid = claims.Sub
-		}
+	uid := userIDFromCtx(r)
+	if uid == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 	serveWS(s.hub, "notifications:"+uid, uid, w, r)
 }

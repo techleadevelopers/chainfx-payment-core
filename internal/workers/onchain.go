@@ -108,7 +108,14 @@ func (ow *OnchainWorker) Start(ctx context.Context) {
 			if !ok {
 				return
 			}
-			go ow.forwardMobilePayout(ev)
+			go func(e Event) {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("OnchainWorker: panic em forwardMobilePayout", "recover", r)
+					}
+				}()
+				ow.forwardMobilePayout(e)
+			}(ev)
 		case <-ticker.C:
 			for _, network := range ow.networks {
 				ow.poll(ctx, network)
@@ -226,7 +233,14 @@ func (ow *OnchainWorker) poll(ctx context.Context, network onchainNetworkConfig)
 		// ── M2M intent matching (transfers to TREASURY_HOT) ──────────────────
 		if m2mEnabled && toAddr == treasuryAddr {
 			// orderIDs is nil here (M2M sentinel). Dispatch async to avoid blocking poll.
-			go ow.matchM2MDeposit(ctx, network, log.TxHash.Hex(), rawAmount, log.BlockNumber)
+			go func(netCfg onchainNetworkConfig, txH string, amt *big.Int, bn uint64) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("OnchainWorker: panic em matchM2MDeposit", "recover", r)
+				}
+			}()
+			ow.matchM2MDeposit(ctx, netCfg, txH, amt, bn)
+		}(network, log.TxHash.Hex(), rawAmount, log.BlockNumber)
 			continue
 		}
 
