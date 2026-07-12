@@ -24,6 +24,8 @@ type Config struct {
 	RateLockSec            int
 	RateLimitWindowMs      int
 	RateLimitMax           int
+	RateLimitBackend       string
+	RedisURL               string
 	OrderRateLimitWindowMs int
 	OrderRateLimitMax      int
 	FeeBps                 int
@@ -51,6 +53,7 @@ type Config struct {
 	ChainFXLivePublicKeys  string
 	ChainFXTestPublicKeys  string
 	ChainFXRequireAPIKey   bool
+	InternalAllowedCIDRs   string
 	AdminBootstrapEmail    string
 	AdminBootstrapPassword string
 
@@ -140,6 +143,8 @@ func LoadConfig() *Config {
 		RateLockSec:            getEnvAsInt("RATE_LOCK_SEC", 600),
 		RateLimitWindowMs:      getEnvAsInt("RATE_LIMIT_WINDOW_MS", 60000),
 		RateLimitMax:           getEnvAsInt("RATE_LIMIT_MAX", 100),
+		RateLimitBackend:       strings.ToLower(getEnv("RATE_LIMIT_BACKEND", "memory")),
+		RedisURL:               getEnv("REDIS_URL", ""),
 		OrderRateLimitWindowMs: getEnvAsInt("ORDER_RATE_LIMIT_WINDOW_MS", 60000),
 		OrderRateLimitMax:      getEnvAsInt("ORDER_RATE_LIMIT_MAX", 20),
 		FeeBps:                 getEnvAsInt("FEE_BPS", getEnvAsInt("TRANSACTION_FEE_BPS", 200)),
@@ -167,6 +172,7 @@ func LoadConfig() *Config {
 		ChainFXLivePublicKeys:  getEnv("CHAINFX_LIVE_PUBLIC_KEYS", ""),
 		ChainFXTestPublicKeys:  getEnv("CHAINFX_TEST_PUBLIC_KEYS", "pk_test_chainfx_local"),
 		ChainFXRequireAPIKey:   getEnvAsBool("CHAINFX_REQUIRE_API_KEY", false),
+		InternalAllowedCIDRs:   getEnv("INTERNAL_ALLOWED_CIDRS", "127.0.0.1/32,::1/128"),
 		AdminBootstrapEmail:    getEnv("ADMIN_BOOTSTRAP_EMAIL", ""),
 		AdminBootstrapPassword: getEnv("ADMIN_BOOTSTRAP_PASSWORD", ""),
 
