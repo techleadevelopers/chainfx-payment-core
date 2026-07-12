@@ -10,31 +10,33 @@ import (
 )
 
 type WorkerManager struct {
-	Bus           *EventBus
-	PriceWorker   *PriceWorker
-	PayoutWorker  *PayoutWorker
-	BuySendWorker *BuySendWorker
-	OnchainWorker *OnchainWorker
-	SweepWorker   *SweepWorker
-	EmailWorker   *EmailWorker
-	db            *database.DB
-	cfg           *config.Config
-	wg            sync.WaitGroup
+	Bus                  *EventBus
+	PriceWorker          *PriceWorker
+	PayoutWorker         *PayoutWorker
+	BuySendWorker        *BuySendWorker
+	OnchainWorker        *OnchainWorker
+	SweepWorker          *SweepWorker
+	EmailWorker          *EmailWorker
+	M2MSettlementWorker  *M2MSettlementWorker
+	db                   *database.DB
+	cfg                  *config.Config
+	wg                   sync.WaitGroup
 }
 
 func NewWorkerManager(db *database.DB, cfg *config.Config, mailer *email.Service) *WorkerManager {
 	bus := NewEventBus()
 
 	return &WorkerManager{
-		Bus:           bus,
-		PriceWorker:   NewPriceWorker(bus),
-		PayoutWorker:  NewPayoutWorker(bus, db, cfg),
-		BuySendWorker: NewBuySendWorker(bus, db, cfg),
-		OnchainWorker: NewOnchainWorker(bus, db, cfg),
-		SweepWorker:   NewSweepWorker(bus, db, cfg),
-		EmailWorker:   NewEmailWorker(bus, db, mailer),
-		db:            db,
-		cfg:           cfg,
+		Bus:                 bus,
+		PriceWorker:         NewPriceWorker(bus),
+		PayoutWorker:        NewPayoutWorker(bus, db, cfg),
+		BuySendWorker:       NewBuySendWorker(bus, db, cfg),
+		OnchainWorker:       NewOnchainWorker(bus, db, cfg),
+		SweepWorker:         NewSweepWorker(bus, db, cfg),
+		EmailWorker:         NewEmailWorker(bus, db, mailer),
+		M2MSettlementWorker: NewM2MSettlementWorker(bus, db, cfg),
+		db:                  db,
+		cfg:                 cfg,
 	}
 }
 
@@ -43,7 +45,7 @@ func NewWorkerManager(db *database.DB, cfg *config.Config, mailer *email.Service
 func (wm *WorkerManager) StartAll(ctx context.Context) {
 	slog.Info("Iniciando todos os workers...")
 
-	wm.wg.Add(6)
+	wm.wg.Add(7)
 
 	go func() {
 		defer wm.wg.Done()
@@ -73,6 +75,11 @@ func (wm *WorkerManager) StartAll(ctx context.Context) {
 	go func() {
 		defer wm.wg.Done()
 		wm.EmailWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.M2MSettlementWorker.Start(ctx)
 	}()
 
 	slog.Info("Todos os workers iniciados com sucesso")
