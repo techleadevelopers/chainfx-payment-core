@@ -343,7 +343,45 @@ Publicacao no MCP Registry:
 - Titulo publico sugerido: `ChainFX Capability Network MCP`
 - Categoria: payments, capability network, agent tools, stablecoin settlement, metered execution
 - Descricao curta: `Discover, execute, meter, bill and settle digital capabilities for AI agents with stablecoin payments.`
+- Manifesto pronto: `.mcp/server.json`
+- Nome de registry atual para GitHub auth: `io.github.techleadevelopers/chainfx-mcp`
+- Nome de registry recomendado para dominio ChainFX: `store.chainfx/capability-network`
 - Requisitos: URL publica HTTPS para `/mcp/initialize`, API key ChainFX e documentacao de auth.
+
+Antes de publicar:
+
+```bash
+mcp-publisher --help
+mcp-publisher login github
+mcp-publisher publish .mcp/server.json
+```
+
+O nome de dominio `store.chainfx/capability-network` deve ser publicado com autenticacao/verificacao de dominio. Com GitHub auth, o `.mcp/server.json` usa:
+
+```json
+{
+  "name": "io.github.techleadevelopers/chainfx-mcp"
+}
+```
+
+O servidor remoto publicado no registry aponta para:
+
+```text
+https://stablecoin-payment-gateway-production-3ee2.up.railway.app/mcp/initialize
+```
+
+Header obrigatorio para clientes MCP:
+
+```text
+Authorization: Bearer <CHAINFX_API_KEY>
+```
+
+Posicionamento publico:
+
+```text
+ChainFX Capability Network lets AI agents discover, purchase, execute,
+meter, bill and settle digital capabilities through one MCP integration.
+```
 
 O `.well-known` deve continuar pequeno e apontar para URLs canonicas:
 
@@ -729,10 +767,34 @@ Rotas operacionais:
 
 - `/developers`
 - `/developers/dashboard`
+- `/developers/dashboard.json`
 - `/developers/logs`
 - `/developers/api-keys`
 
-O dashboard mostra API keys mascaradas, logs recentes de `order_events` e `buy_order_events`, e instrui o retry de webhook.
+O dashboard e protegido por API key ChainFX (`Authorization: Bearer ...` ou `?apiKey=...`) e mostra:
+
+- API keys mascaradas.
+- API logs reais de `api_request_logs`, sem payload sensivel e sem API key em texto aberto.
+- MCP tool calls de `mcp_tool_logs`, incluindo tool, status, erro e latencia.
+- Purchases recentes do marketplace/capability exchange.
+- Usage/execution events de `marketplace_execution_events`.
+- Status agregado de webhooks, assinaturas ativas, entregas e falhas.
+
+Tabelas operacionais:
+
+- `api_request_logs`
+- `mcp_tool_logs`
+- `marketplace_purchases`
+- `marketplace_execution_events`
+- `webhook_subscriptions`
+- `webhook_deliveries`
+
+Seguranca:
+
+- API keys completas nunca sao gravadas nos logs do dashboard.
+- Apenas hash curto da key e salvo para correlacao operacional.
+- Payloads de requests HTTP nao sao persistidos.
+- `mock_dev` e seed fixtures do Capability Layer aparecem como nao producao no discovery.
 
 ### Artefatos da Fase 3
 
