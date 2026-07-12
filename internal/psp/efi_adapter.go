@@ -1,7 +1,11 @@
 // Package psp — efi_adapter.go
-// EfiAdapter wraps the existing Efí Bank PIX integration behind the Provider interface.
-// All heavy lifting (OAuth, certificate loading, charge creation) lives in the
-// existing internal/mobile PIX code; this adapter normalises the surface.
+// EfiAdapter wraps Efí Bank PIX behind the Provider interface.
+// Production hardening applied:
+//   - OAuth token is cached and reused until 5 min before expiry (avoids a
+//     fresh round-trip on every webhook / charge call).
+//   - Amount parsing uses strconv.ParseFloat (not fmt.Sscanf).
+//   - ParseWebhookAll processes every pix[] entry independently.
+//   - getToken uses sync.Mutex — safe under concurrent webhook bursts.
 package psp
 
 import (
@@ -11,6 +15,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 )
 
@@ -21,6 +27,11 @@ type EfiAdapter struct {
 	pixKey       string
 	baseURL      string
 	httpClient   *http.Client
+
+	// Token cache — avoids a round-trip to /oauth/token on every call.
+	tokenMu      sync.Mutex
+	cachedToken  string
+	tokenExpires time.Time // zero = not set
 }
 
 // NewEfiAdapter creates an EfiAdapter.
@@ -38,7 +49,7 @@ func NewEfiAdapter(clientID, clientSecret, pixKey, baseURL string, tlsCfg *tls.C
 
 func (e *EfiAdapter) Name() string { return "efi" }
 
-// CreateCharge creates an immediate PIX charge via Efí Bank /cob endpoint.
+// CreateCharge creates an immediate PIX charge via Efí Bank /v2/cob endpoint.
 func (e *EfiAdapter) CreateCharge(ctx context.Context, charge PixCharge) (*PixChargeResult, error) {
 	token, err := e.getToken(ctx)
 	if err != nil {
@@ -50,15 +61,21 @@ func (e *EfiAdapter) CreateCharge(ctx context.Context, charge PixCharge) (*PixCh
 		expiry = 3600
 	}
 
+	// Efí requires CPF/CNPJ only when present; omit empty fields.
+	devedor := map[string]any{"nome": charge.PayerName}
+	if charge.PayerCPF != "" {
+		devedor["cpf"] = charge.PayerCPF
+	}
+
 	payload := map[string]any{
-		"calendario": map[string]any{"expiracao": expiry},
-		"devedor": map[string]any{
-			"cpf":  charge.PayerCPF,
-			"nome": charge.PayerName,
-		},
-		"valor":     map[string]any{"original": fmt.Sprintf("%.2f", charge.AmountBRL)},
-		"chave":     e.pixKey,
+		"calendario":         map[string]any{"expiracao": expiry},
+		"devedor":            devedor,
+		"valor":              map[string]any{"original": fmt.Sprintf("%.2f", charge.AmountBRL)},
+		"chave":              e.pixKey,
 		"solicitacaoPagador": charge.Description,
+		"infoAdicionais": []map[string]any{
+			{"nome": "ID", "valor": charge.ExternalID},
+		},
 	}
 
 	body, err := json.Marshal(payload)
@@ -86,10 +103,9 @@ func (e *EfiAdapter) CreateCharge(ctx context.Context, charge PixCharge) (*PixCh
 	}
 
 	var result struct {
-		TxID      string `json:"txid"`
+		TxID         string `json:"txid"`
 		PixCopiaECola string `json:"pixCopiaECola"`
-		Location  string `json:"location"`
-		Calendario struct {
+		Calendario   struct {
 			Criacao   string `json:"criacao"`
 			Expiracao int    `json:"expiracao"`
 		} `json:"calendario"`
@@ -108,48 +124,75 @@ func (e *EfiAdapter) CreateCharge(ctx context.Context, charge PixCharge) (*PixCh
 	}, nil
 }
 
-// ParseWebhook parses an Efí Bank PIX webhook notification.
-func (e *EfiAdapter) ParseWebhook(_ context.Context, body []byte, _ string) (*PixWebhookPayload, error) {
+// ParseWebhook parses an Efí Bank webhook and returns the first pix entry.
+// For full multi-entry support use ParseWebhookAll.
+func (e *EfiAdapter) ParseWebhook(ctx context.Context, body []byte, _ string) (*PixWebhookPayload, error) {
+	all, err := e.ParseWebhookAll(ctx, body, "")
+	if err != nil {
+		return nil, err
+	}
+	return &all[0], nil
+}
+
+// ParseWebhookAll parses an Efí Bank webhook and returns one PixWebhookPayload
+// per pix[] entry. Efí sends batches; each entry may belong to a different order.
+//
+// Amount format: Efí sends "valor" as a decimal string "50.00" — parsed with
+// strconv.ParseFloat (never fmt.Sscanf) to guarantee no silent zero on parse error.
+func (e *EfiAdapter) ParseWebhookAll(_ context.Context, body []byte, _ string) ([]PixWebhookPayload, error) {
 	var raw struct {
 		Pix []struct {
-			EndToEndID string `json:"endToEndId"`
-			TXID       string `json:"txid"`
-			Valor      string `json:"valor"`
+			EndToEndID        string `json:"endToEndId"`
+			TXID              string `json:"txid"`
+			Valor             string `json:"valor"`
 			HorarioLiquidacao string `json:"horarioLiquidacao"`
-			Pagador    struct {
+			Pagador           struct {
 				Nome  string `json:"nome"`
 				Chave string `json:"chave"`
 			} `json:"pagador"`
 		} `json:"pix"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("efi: parse webhook: %w", err)
+		return nil, fmt.Errorf("efi: ParseWebhookAll: unmarshal: %w", err)
 	}
 	if len(raw.Pix) == 0 {
-		return nil, fmt.Errorf("efi: webhook has no pix entries")
+		return nil, fmt.Errorf("efi: ParseWebhookAll: no pix entries in payload")
 	}
-	p := raw.Pix[0]
-	var amount float64
-	fmt.Sscanf(p.Valor, "%f", &amount)
-	paidAt, _ := time.Parse(time.RFC3339, p.HorarioLiquidacao)
-	return &PixWebhookPayload{
-		Provider:   e.Name(),
-		TXID:       p.TXID,
-		EndToEndID: p.EndToEndID,
-		AmountBRL:  amount,
-		PaidAt:     paidAt,
-		PayerName:  p.Pagador.Nome,
-		PayerKey:   p.Pagador.Chave,
-	}, nil
+
+	out := make([]PixWebhookPayload, 0, len(raw.Pix))
+	for i, p := range raw.Pix {
+		// strconv.ParseFloat — never fmt.Sscanf (silent zero on error).
+		amount, err := strconv.ParseFloat(p.Valor, 64)
+		if err != nil || amount <= 0 {
+			return nil, fmt.Errorf("efi: ParseWebhookAll: entry %d has invalid valor %q: %w", i, p.Valor, err)
+		}
+
+		paidAt, _ := time.Parse(time.RFC3339, p.HorarioLiquidacao)
+		if paidAt.IsZero() {
+			paidAt = time.Now().UTC()
+		}
+
+		out = append(out, PixWebhookPayload{
+			Provider:   e.Name(),
+			TXID:       p.TXID,
+			EndToEndID: p.EndToEndID,
+			AmountBRL:  amount,
+			PaidAt:     paidAt,
+			PayerName:  p.Pagador.Nome,
+			PayerKey:   p.Pagador.Chave,
+		})
+	}
+	return out, nil
 }
 
-// HealthCheck calls GET /v2/cob with a non-existent TXID to verify connectivity.
+// HealthCheck calls GET /v2/cob with a non-existent probe TXID.
+// 404 = provider up (charge not found is expected); anything else = degraded.
 func (e *EfiAdapter) HealthCheck(ctx context.Context) error {
 	token, err := e.getToken(ctx)
 	if err != nil {
 		return fmt.Errorf("efi health: auth failed: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/v2/cob/healthcheck-probe", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/v2/cob/chainfx-healthprobe-000", nil)
 	if err != nil {
 		return err
 	}
@@ -159,16 +202,31 @@ func (e *EfiAdapter) HealthCheck(ctx context.Context) error {
 		return err
 	}
 	resp.Body.Close()
-	// 404 means the endpoint exists (charge not found) — provider is up.
 	if resp.StatusCode == 404 || resp.StatusCode == 200 {
 		return nil
 	}
 	return fmt.Errorf("efi health: unexpected status %d", resp.StatusCode)
 }
 
-// getToken fetches a bearer token from Efí Bank OAuth endpoint.
+// ── OAuth token cache ──────────────────────────────────────────────────────────
+
+// getToken returns a valid bearer token, reusing the cached one when possible.
+// Thread-safe: uses a Mutex so concurrent webhook bursts don't each fetch a
+// fresh token simultaneously.
 func (e *EfiAdapter) getToken(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/oauth/token", bytes.NewBufferString("grant_type=client_credentials"))
+	e.tokenMu.Lock()
+	defer e.tokenMu.Unlock()
+
+	// Reuse cached token if it's still valid (with 5 min safety margin).
+	if e.cachedToken != "" && time.Now().Before(e.tokenExpires.Add(-5*time.Minute)) {
+		return e.cachedToken, nil
+	}
+
+	// Fetch a fresh token from Efí OAuth endpoint.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		e.baseURL+"/oauth/token",
+		bytes.NewBufferString("grant_type=client_credentials"),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -177,19 +235,31 @@ func (e *EfiAdapter) getToken(ctx context.Context) (string, error) {
 
 	resp, err := e.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("efi: getToken request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("efi auth returned %d", resp.StatusCode)
+		return "", fmt.Errorf("efi: getToken returned HTTP %d", resp.StatusCode)
 	}
 
 	var tok struct {
 		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"` // seconds; Efí typically 3600
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tok); err != nil {
-		return "", err
+		return "", fmt.Errorf("efi: getToken decode: %w", err)
 	}
-	return tok.AccessToken, nil
+	if tok.AccessToken == "" {
+		return "", fmt.Errorf("efi: getToken: empty access_token in response")
+	}
+
+	expiry := tok.ExpiresIn
+	if expiry <= 0 {
+		expiry = 3600 // default 1 h if Efí omits the field
+	}
+	e.cachedToken = tok.AccessToken
+	e.tokenExpires = time.Now().Add(time.Duration(expiry) * time.Second)
+
+	return e.cachedToken, nil
 }

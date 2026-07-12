@@ -12,6 +12,7 @@ import (
         "payment-gateway/internal/database"
         "payment-gateway/internal/email"
         "payment-gateway/internal/paymaster"
+        "payment-gateway/internal/psp"
         "payment-gateway/internal/webhooks"
         "payment-gateway/internal/workers"
 )
@@ -29,6 +30,7 @@ type Server struct {
         webhookDashboard *webhooks.Dashboard
         agents           *agents.Client
         paymaster        *paymaster.Service
+        pspRouter        *psp.Router  // PSP abstraction; nil = legacy inline Efí parsing
 }
 
 type requestIDContextKey struct{}
@@ -64,6 +66,13 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 // Called from the main entrypoint after the RPC pool is initialised.
 func (s *Server) WithPaymaster(svc *paymaster.Service) {
         s.paymaster = svc
+}
+
+// WithPSP attaches a PSP Router so PIX webhooks are normalised through the
+// provider abstraction layer instead of using inline Efí JSON parsing.
+// When router is nil the existing inline behaviour is preserved (backward-compat).
+func (s *Server) WithPSP(router *psp.Router) {
+        s.pspRouter = router
 }
 
 func csvContains(csv, value string) bool {
