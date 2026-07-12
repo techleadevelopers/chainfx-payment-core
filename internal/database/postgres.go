@@ -1311,6 +1311,79 @@ ALTER TABLE buy_order_events ADD COLUMN IF NOT EXISTS request_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_buy_webhook_provider_once ON buy_order_events (buy_order_id, (payload ->> 'providerId')) WHERE type = 'webhook.provider' AND payload ? 'providerId';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_order_idempotency_once ON order_events (order_id, (payload ->> 'key')) WHERE type = 'idempotency' AND payload ? 'key';
 
+CREATE TABLE IF NOT EXISTS quotes (
+  id TEXT PRIMARY KEY,
+  side VARCHAR(8) NOT NULL CHECK (side IN ('buy','sell')),
+  asset VARCHAR(16) NOT NULL,
+  fiat_currency VARCHAR(8) NOT NULL,
+  payment_method VARCHAR(32) NOT NULL DEFAULT 'pix',
+  amount_minor BIGINT NOT NULL,
+  crypto_amount_units TEXT NOT NULL,
+  rate NUMERIC(28,8) NOT NULL,
+  market_rate NUMERIC(28,8) NOT NULL DEFAULT 0,
+  fee_minor BIGINT NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  api_key_hash TEXT NOT NULL DEFAULT '',
+  body_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_api_key_expires ON quotes(api_key_hash, expires_at);
+CREATE INDEX IF NOT EXISTS idx_quotes_consumable ON quotes(expires_at) WHERE consumed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  api_key_hash TEXT,
+  body_hash TEXT NOT NULL,
+  status VARCHAR(16) NOT NULL DEFAULT 'started',
+  result_type TEXT,
+  result_id TEXT,
+  response_status INT,
+  response_json JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (key, operation, api_key_hash)
+);
+ALTER TABLE idempotency_keys ALTER COLUMN api_key_hash SET DEFAULT '';
+UPDATE idempotency_keys SET api_key_hash = '' WHERE api_key_hash IS NULL;
+ALTER TABLE idempotency_keys ALTER COLUMN api_key_hash SET NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_idempotency_result ON idempotency_keys(result_type, result_id);
+
+CREATE TABLE IF NOT EXISTS api_request_logs (
+  id UUID PRIMARY KEY,
+  request_id TEXT NOT NULL,
+  method VARCHAR(12) NOT NULL,
+  path TEXT NOT NULL,
+  route_class VARCHAR(32) NOT NULL,
+  status_code INT NOT NULL,
+  duration_ms BIGINT NOT NULL,
+  api_key_hash TEXT,
+  api_key_scope VARCHAR(32),
+  auth_mode VARCHAR(32),
+  client_ip TEXT,
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_created ON api_request_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_route ON api_request_logs(route_class, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_api_request_logs_key ON api_request_logs(api_key_hash, created_at DESC) WHERE api_key_hash IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS mcp_tool_logs (
+  id UUID PRIMARY KEY,
+  request_id TEXT,
+  tool_name TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  error_message TEXT,
+  duration_ms BIGINT NOT NULL DEFAULT 0,
+  api_key_hash TEXT,
+  auth_mode VARCHAR(32),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_created ON mcp_tool_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_tool ON mcp_tool_logs(tool_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_tool_logs_key ON mcp_tool_logs(api_key_hash, created_at DESC) WHERE api_key_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS webhook_subscriptions (
   id UUID PRIMARY KEY,
   provider VARCHAR(32) NOT NULL DEFAULT 'generic',
