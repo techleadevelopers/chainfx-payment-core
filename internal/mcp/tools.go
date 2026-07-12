@@ -3,6 +3,8 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -174,23 +176,67 @@ type toolCallRequest struct {
 }
 
 func (s *Server) handleToolsCall(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req toolCallRequest
 	if err := decodeJSON(r, &req); err != nil {
+		s.recordMCPToolLog(r, "", "error", "invalid_json", time.Since(start))
 		writeMCPError(w, http.StatusBadRequest, "JSON inválido")
 		return
 	}
 	result, err := s.callTool(r.Context(), req.Name, req.Arguments)
 	if err != nil {
+		s.recordMCPToolLog(r, req.Name, "error", err.Error(), time.Since(start))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"isError": true,
 			"content": []map[string]any{{"type": "text", "text": err.Error()}},
 		})
 		return
 	}
+	s.recordMCPToolLog(r, req.Name, "ok", "", time.Since(start))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"isError": false,
 		"content": []map[string]any{{"type": "json", "json": result}},
 	})
+}
+
+func (s *Server) recordMCPToolLog(r *http.Request, toolName, status, errorMessage string, duration time.Duration) {
+	if s == nil || s.db == nil {
+		return
+	}
+	apiKey := mcpAPIKey(r)
+	authMode := "anonymous"
+	if apiKey != "" {
+		authMode = "api_key"
+	}
+	_ = s.db.RecordMCPToolLog(r.Context(), database.MCPToolLogInput{
+		RequestID:    strings.TrimSpace(r.Header.Get("X-Request-Id")),
+		ToolName:     toolName,
+		Status:       status,
+		ErrorMessage: errorMessage,
+		DurationMS:   duration.Milliseconds(),
+		APIKeyHash:   shortMCPSecretHash(apiKey),
+		AuthMode:     authMode,
+	})
+}
+
+func mcpAPIKey(r *http.Request) string {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		return strings.TrimSpace(auth[7:])
+	}
+	if key := strings.TrimSpace(r.Header.Get("X-Api-Key")); key != "" {
+		return key
+	}
+	return strings.TrimSpace(r.URL.Query().Get("apiKey"))
+}
+
+func shortMCPSecretHash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (any, error) {
