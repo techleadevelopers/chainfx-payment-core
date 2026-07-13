@@ -92,7 +92,7 @@ func (s *Server) shouldSkipSmartRateLimit(r *http.Request) bool {
 		return true
 	}
 	switch r.URL.Path {
-	case "/healthz", "/readyz", "/api/pix/webhook", "/api/pix/webhook/buy", "/api/stripe/webhook/buy":
+	case "/healthz", "/readyz", "/api/pix/webhook", "/api/pix/webhook/buy", "/api/efi/charges/webhook/buy":
 		return true
 	default:
 		return false
@@ -173,13 +173,13 @@ func cors(cfg *config.Config, next http.Handler) http.Handler {
 			}
 			if item == "*" {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature, Stripe-Signature")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 				break
 			}
 			if origin != "" && item == origin {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature, Stripe-Signature")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Api-Key, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 				break
 			}
