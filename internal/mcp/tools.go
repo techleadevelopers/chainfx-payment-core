@@ -10,8 +10,8 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"strconv"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -877,7 +877,13 @@ func (s *Server) executePaymentsFXCapability(ctx context.Context, event *databas
 	feeUSDT := feeUSDTTokens.Float64()
 	requiredUSDT := requiredUSDTTokens.Float64()
 
-	paymentAddress := strings.ToLower(strings.TrimSpace(s.cfg.TreasuryHot))
+	paymentAddress, err := s.db.PickAvailableM2MDepositAddress(ctx, splitMCPAddressList(s.cfg.M2MDepositAddresses), s.cfg.TreasuryHot)
+	if err != nil {
+		return nil, fmt.Errorf("payments_fx: endereco de deposito indisponivel: %w", err)
+	}
+	if !common.IsHexAddress(paymentAddress) {
+		return nil, fmt.Errorf("payments_fx: endereco de deposito M2M invalido")
+	}
 	reqHash := database.CanonicalRequestHash(paymentType, amountBRLStr, pixKey, idempotencyKey, agentWallet)
 	hashShort := reqHash
 	if len(hashShort) > 24 {
@@ -1475,9 +1481,12 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 	}
 	intentID := "int_m2m_" + hashShort
 
-	paymentAddress := strings.ToLower(strings.TrimSpace(s.cfg.TreasuryHot))
+	paymentAddress, err := s.db.PickAvailableM2MDepositAddress(ctx, splitMCPAddressList(s.cfg.M2MDepositAddresses), s.cfg.TreasuryHot)
+	if err != nil {
+		return nil, fmt.Errorf("endereco de deposito M2M indisponivel: %w", err)
+	}
 	if !common.IsHexAddress(paymentAddress) {
-		return nil, fmt.Errorf("TREASURY_HOT deve ser um endereco EVM valido")
+		return nil, fmt.Errorf("endereco de deposito M2M deve ser um endereco EVM valido")
 	}
 
 	in := database.M2MCreateInput{
@@ -1591,6 +1600,12 @@ func maxIntMCP(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func splitMCPAddressList(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
 }
 
 // maskURL returns a partially redacted version of a URL — scheme+host only,
