@@ -739,7 +739,7 @@ func (db *DB) ApplyBuyProviderWebhook(ctx context.Context, buyOrderID, providerI
 	if providerPaymentID == "" {
 		providerPaymentID = providerID
 	}
-	_, err = tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, `
                 UPDATE buy_orders SET status = $2,
                         tx_hash_out = COALESCE(NULLIF($3,''), tx_hash_out),
                         provider_payment_id = COALESCE(NULLIF($4,''), provider_payment_id),
@@ -749,10 +749,18 @@ func (db *DB) ApplyBuyProviderWebhook(ctx context.Context, buyOrderID, providerI
                         delivered_at = CASE WHEN $2 IN ('enviado','delivered','confirmado') AND delivered_at IS NULL THEN now() ELSE delivered_at END,
                         updated_at = now()
                 WHERE id = $1
-                  AND NOT (status IN ('enviado','delivered','confirmado') AND $2 = 'erro')`,
+                  AND NOT (status IN ('pago_fiat','pago_pix','enviando','pendente_confirmacao','enviado','delivered','confirmado') AND $2 LIKE 'aguardando_%')
+                  AND NOT (status IN ('enviando','pendente_confirmacao','enviado','delivered','confirmado') AND $2 IN ('pago_fiat','pago_pix','erro'))`,
 		buyOrderID, status, txHashOut, providerPaymentID, errMsg)
 	if err != nil {
 		return false, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rows == 0 {
+		return true, tx.Commit()
 	}
 	rawStatus, _ := json.Marshal(extra)
 	_, err = tx.ExecContext(ctx,
@@ -1260,6 +1268,24 @@ CREATE TABLE IF NOT EXISTS order_events (
 );
 
 ALTER TABLE order_events ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+CREATE TABLE IF NOT EXISTS order_incidents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  incident_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'high' CHECK (severity IN ('low','medium','high','critical')),
+  reason TEXT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','under_review','resolved','rejected')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_incidents_open_unique
+  ON order_incidents(order_id, incident_type)
+  WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_order_incidents_status_created_at
+  ON order_incidents(status, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS payouts (
   id UUID PRIMARY KEY,
