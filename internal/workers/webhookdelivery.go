@@ -201,8 +201,8 @@ func (w *WebhookDeliveryWorker) subscriptionsForEvent(ctx context.Context, event
 	rows, err := w.db.SQL.QueryContext(ctx, `
 		SELECT id, target_url, secret
 		FROM webhook_subscriptions
-		WHERE active=true AND events @> $1::jsonb`,
-		fmt.Sprintf(`["%s"]`, eventType))
+		WHERE active=true AND ($1 = ANY(events) OR '*' = ANY(events))`,
+		eventType)
 	if err != nil {
 		return nil, err
 	}
