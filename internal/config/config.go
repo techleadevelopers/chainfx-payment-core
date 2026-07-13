@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/joho/godotenv"
 )
 
@@ -304,16 +305,17 @@ func (c *Config) ValidateProduction() error {
 		return nil
 	}
 	required := map[string]string{
-		"DATABASE_URL":       c.DatabaseURL,
-		"LGPD_SECRET":        c.LGPDSecret,
-		"WEBHOOK_SECRET":     c.WebhookSecret,
-		"PIX_WEBHOOK_SECRET": c.PixWebhookSecret,
-		"SIGNER_URL":         c.SignerUrl,
-		"SIGNER_HMAC_SECRET": c.SignerHmacSecret,
-		"EFI_CLIENT_ID":      c.EfiClientID,
-		"EFI_CLIENT_SECRET":  c.EfiClientSecret,
-		"EFI_PIX_KEY":        c.EfiPixKey,
-		"TREASURY_HOT":       c.TreasuryHot,
+		"DATABASE_URL":             c.DatabaseURL,
+		"LGPD_SECRET":              c.LGPDSecret,
+		"WEBHOOK_SECRET":           c.WebhookSecret,
+		"PIX_WEBHOOK_SECRET":       c.PixWebhookSecret,
+		"SIGNER_URL":               c.SignerUrl,
+		"SIGNER_HMAC_SECRET":       c.SignerHmacSecret,
+		"EFI_CLIENT_ID":            c.EfiClientID,
+		"EFI_CLIENT_SECRET":        c.EfiClientSecret,
+		"EFI_PIX_KEY":              c.EfiPixKey,
+		"TREASURY_HOT":             c.TreasuryHot,
+		"CHAINFX_LIVE_SECRET_KEYS": c.ChainFXLiveSecretKeys,
 	}
 	if strings.TrimSpace(c.EfiCertificatePath) == "" && strings.TrimSpace(c.EfiCertificateP12) == "" {
 		required["EFI_CERTIFICATE_PATH or EFI_CERTIFICATE_P12_BASE64"] = ""
@@ -334,6 +336,15 @@ func (c *Config) ValidateProduction() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("configuracao de producao incompleta: %s", strings.Join(missing, ", "))
 	}
+	if !common.IsHexAddress(strings.TrimSpace(c.TreasuryHot)) {
+		return fmt.Errorf("TREASURY_HOT deve ser um endereco EVM valido")
+	}
+	if sellWallet := strings.TrimSpace(c.SellWalletAddress); sellWallet != "" && !common.IsHexAddress(sellWallet) {
+		return fmt.Errorf("SELL_WALLET_ADDRESS deve ser um endereco EVM valido")
+	}
+	if err := validateEVMAddressList("M2M_DEPOSIT_ADDRESSES", c.M2MDepositAddresses); err != nil {
+		return err
+	}
 	if c.AllowSimulations {
 		return fmt.Errorf("ALLOW_SIMULATIONS deve ser false em producao")
 	}
@@ -343,6 +354,21 @@ func (c *Config) ValidateProduction() error {
 	signerURL := strings.ToLower(strings.TrimSpace(c.SignerUrl))
 	if strings.Contains(signerURL, "up.railway.app") {
 		return fmt.Errorf("SIGNER_URL deve usar rede privada em producao, nao dominio publico Railway; exemplo: http://signer.railway.internal:4010")
+	}
+	return nil
+}
+
+func validateEVMAddressList(name, raw string) error {
+	for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	}) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !common.IsHexAddress(value) {
+			return fmt.Errorf("%s contem endereco EVM invalido: %s", name, value)
+		}
 	}
 	return nil
 }
