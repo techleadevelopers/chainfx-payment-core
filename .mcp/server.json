@@ -50,7 +50,7 @@
       "agent_payments_flow": [
         "create_payment_intent",
         "quote_required_usdt",
-        "deposit_usdt_to_unique_payment_address",
+        "deposit_exact_usdt_to_payment_address",
         "match_deposit_by_address",
         "chainfx_pays_pix_payment_link_or_card_bill",
         "attach_settlement_receipt",
@@ -86,7 +86,7 @@
       "agent_payments": {
         "status": "available",
         "capability_id": "agent_payments",
-        "description": "Agents can pay real-world PIX recipients, payment links or card bills by funding an intent with BSC USDT. ChainFX performs the fiat payment after deposit confirmation and returns settled status plus receipt.",
+        "description": "Agents can pay real-world PIX recipients, payment links or card bills by funding an intent with the exact required USDT. ChainFX performs the fiat payment after deposit confirmation and returns settled status plus receipt.",
         "types": [
           "pix",
           "credit_card"
