@@ -10,34 +10,19 @@ const (
 // PixWebhookStatus converte status do webhook PIX para status interno
 func PixWebhookStatus(providerStatus string) string {
 	status := strings.ToLower(strings.TrimSpace(providerStatus))
-	
+
 	// Considerar variações de "concluído" e "aprovado"
 	if strings.Contains(status, "conclu") || strings.Contains(status, "aprov") {
 		return StatusPaidFiat
 	}
-	
+
 	// Status conhecidos de erro
 	if status == "rejeitado" || status == "cancelado" || status == "expirado" {
 		return StatusError
 	}
-	
+
 	// Por padrão, qualquer outro status é erro
 	return StatusError
-}
-
-// StripeWebhookStatus converte evento do Stripe para status interno
-func StripeWebhookStatus(eventType string) string {
-	eventType = strings.TrimSpace(eventType)
-	
-	switch eventType {
-	case "checkout.session.completed",
-		"payment_intent.succeeded",
-		"charge.succeeded",
-		"invoice.payment_succeeded":
-		return StatusPaidFiat
-	default:
-		return StatusError
-	}
 }
 
 // ShouldPublishBuyPaid verifica se o status deve disparar evento buy.paid
