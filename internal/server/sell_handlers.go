@@ -18,10 +18,6 @@ const sellDepositTTL = 8 * time.Minute
 
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	markLegacyRoute(w, r, "/sell")
-	if !s.limiter.Allow("sell:" + clientIP(r)) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite de criaÃ§ão de ordens excedido"})
-		return
-	}
 	var req struct {
 		AmountBRL    float64 `json:"amountBRL"`
 		AmountUSDT   float64 `json:"amountUSDT"`
