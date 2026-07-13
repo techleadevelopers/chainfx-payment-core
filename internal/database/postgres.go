@@ -417,6 +417,41 @@ func (db *DB) HasDepositTxForOtherOrder(ctx context.Context, orderID, txHash str
 	return exists, err
 }
 
+func (db *DB) ExpireStaleSellOrders(ctx context.Context) (int, error) {
+	rows, err := db.SQL.QueryContext(ctx, `
+		UPDATE orders
+		   SET status = 'expirada',
+		       error = 'deposito nao identificado em ate 8 minutos; ordem expirada sem estorno automatico',
+		       updated_at = now()
+		 WHERE status = 'aguardando_deposito'
+		   AND deposit_tx IS NULL
+		   AND created_at <= now() - interval '8 minutes'
+		RETURNING id`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		_ = db.AddEvent(ctx, id, "order.expirada", map[string]any{
+			"reason": "deposito nao identificado em ate 8 minutos",
+			"policy": "no_automatic_refund",
+		})
+	}
+	return len(ids), nil
+}
+
 func (db *DB) AddEvent(ctx context.Context, orderID, eventType string, payload any) error {
 	raw, _ := json.Marshal(payload)
 	requestID := requestIDFromPayload(payload)
