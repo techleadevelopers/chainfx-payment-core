@@ -41,3 +41,16 @@ const order = await chainfx.buy({
 ```
 
 Requires Node 18+ because it uses native `fetch`.
+
+## Current backend coverage
+
+This SDK is intentionally minimal today: quote, buy and sell primitives. The backend now also exposes production endpoints that can be called directly until the SDK grows wrappers:
+
+| Area | Endpoints |
+| --- | --- |
+| Efi credit-card buy | `POST /api/buy` with `paymentMethod=credit_card`, `paymentToken`, `customer`, `billingAddress` |
+| MCP Capability Network | `POST /mcp/initialize`, `POST /mcp/tools/list`, `POST /mcp/tools/call` |
+| Agent Pay | `POST /agent/v1/pay`, `GET /agent/v1/pay/{id}` |
+| Gas Station | `GET /v1/gas/status`, `GET /v1/gas/quote`, `POST /v1/gas/relay`, `GET /v1/gas/relay/{id}` |
+
+Agents and developer backends should use Bearer API keys issued by the Developer Console.
