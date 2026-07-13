@@ -87,6 +87,10 @@ sequenceDiagram
 - `internal/database`: schema, repositorios, eventos e persistencia LGPD.
 - `internal/privacy`: hash e criptografia AES-GCM.
 - `internal/BSC`: validacao e derivacao BSC.
+- `internal/psp`: camada PSP com `Router`, `EfiAdapter`, health probe, fallback/restore e parsing de webhooks PIX em lote.
+- `internal/paymaster`: Gas Station/Paymaster com oracle, estimator, idempotency, retry, batcher, token relayer e service top-level.
+- `internal/rpc`: pool RPC EVM usado por on-chain workers, AutoSweeper e Paymaster.
+- `internal/adversarial`: engine de cenarios adversariais/chaos acionado pelo painel admin.
 - `signer`: servico isolado de assinatura. Em producao de BSC, usar signer com `SIGNER_NETWORK=BSC`.
 
 ## Fluxos Principais
@@ -125,6 +129,55 @@ Status Efí `approved` e `waiting` não liberam cripto.
 4. Deposito valido marca `pago`.
 5. `PayoutWorker` liquida PIX.
 
+### Gas Station / Paymaster
+
+1. Cliente chama `/v1/gas/status` para verificar disponibilidade.
+2. Cliente chama `/v1/gas/quote` para estimar gas/fee.
+3. Cliente envia relay em `POST /v1/gas/relay`.
+4. `internal/paymaster.Service` deduplica por `sig_hash`, estima gas via RPC pool e persiste `gas_relay_requests`.
+5. O batcher agrupa relays em janela curta e o retry executa backoff exponencial com jitter.
+6. Falha permanente vai para DLQ/status persistido; status pode ser consultado em `GET /v1/gas/relay/{id}`.
+
+Arquivos principais:
+
+| Arquivo | Responsabilidade |
+| --- | --- |
+| `internal/paymaster/oracle.go` | Gas oracle via BSC `eth_gasPrice`/RPC pool e cache curto |
+| `internal/paymaster/estimator.go` | `eth_estimateGas`, conversao wei/gwei e fee USDT |
+| `internal/paymaster/idempotency.go` | Dedup de assinatura / `sig_hash` |
+| `internal/paymaster/retry.go` | Exponential backoff com jitter e DLQ |
+| `internal/paymaster/batcher.go` | Batching de relays |
+| `internal/paymaster/token_relayer.go` | Split net leg + fee leg, aritmetica inteira |
+| `internal/paymaster/paymaster.go` | Service top-level, Quote, SubmitRelay, poller |
+
+### PSP Router Efi
+
+Quando `cmd/api/main.go` encontra credenciais e certificado Efi, monta `EfiAdapter` e `psp.Router`.
+
+- `handlePixWebhookBuy` usa `Router.ParseWebhookAll` quando disponivel.
+- Cada evento PIX em lote e processado como settlement independente.
+- Sem router configurado, o fluxo legado continua ativo.
+- `WorkerManager.PSPRouter` roda health probe periodico para failover/restore.
+
+### Chaos / Adversarial Ops
+
+O painel admin consegue disparar cenarios reais em processo:
+
+```http
+POST /v1/admin/gas/chaos-run
+GET  /v1/admin/gas/chaos-history
+GET  /admin/chaos
+```
+
+Cenarios cobertos:
+
+- `DB_CONNECTIVITY`
+- `ONCHAIN_CONFIRMATION_FLOOR`
+- `CONCURRENT_SIG_LOCK`
+- `SSRF_WEBHOOK_VALIDATION`
+- `RATE_LIMITER_FLOOD`
+- `CONFIG_INTEGRITY`
+
 ## Status de Ordem
 
 ### BUY
@@ -159,6 +212,17 @@ Status Efí `approved` e `waiting` não liberam cripto.
 ```http
 GET /healthz
 GET /readyz
+```
+
+### Gas Station
+
+```http
+GET  /v1/gas/status
+GET  /v1/gas/quote
+POST /v1/gas/relay
+GET  /v1/gas/relay/{id}
+GET  /v1/gas/relays
+GET  /v1/gas/sweeper/runs
 ```
 
 ### Quote
@@ -467,6 +531,20 @@ docker build -t swappy-payment-gateway .
 docker run --rm -p 3000:3000 --env-file .env swappy-payment-gateway
 ```
 
+### Migrations operacionais recentes
+
+Aplicar conforme ambiente e historico de migrations:
+
+```bash
+psql $DATABASE_URL -f migrations/005_gas_station.sql
+psql $DATABASE_URL -f gas_station.sql
+psql $DATABASE_URL -f schema_chaos.sql
+psql $DATABASE_URL -f schema_m2m.sql
+psql $DATABASE_URL -f schema_agent_pricing.sql
+```
+
+`migrations/005_gas_station.sql` cria `gas_relay_requests` e `auto_sweeper_runs`. `gas_station.sql` consolida o schema de runtime do Paymaster/Gas Station para ambientes que ainda nao usam o runner incremental.
+
 ### Docker Compose
 
 Exemplo minimo:
@@ -513,6 +591,23 @@ Ferramenta:
 ```bash
 go run ./cmd/benchflow -h
 ```
+
+### Stress k6 Paymaster
+
+```bash
+k6 run tests/paymaster_stress.js \
+  -e BASE_URL=https://api.chainfx.store \
+  -e API_KEY_LIVE=sk_live_... \
+  -e API_KEY_TEST=sk_test_...
+```
+
+Cenarios:
+
+- `paymaster_spike`: ramping arrival rate para SLO de relay.
+- `idempotency_collision`: mesma assinatura em concorrencia; espera 1 aceite e colisoes.
+- `rate_limit_tier`: `sk_test_*` limitado.
+- `gas_quote_load`: carga continua em quote.
+- `gas_status_probe`: probe continuo de status.
 
 ### Preparar ambiente
 
