@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+const sellDepositTTL = 8 * time.Minute
+
 func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	markLegacyRoute(w, r, "/sell")
 	if !s.limiter.Allow(clientIP(r)) {
@@ -103,7 +105,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		Asset:             asset,
 		Network:           network,
 		RateLocked:        rate,
-		RateLockExpiresAt: time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
+		RateLockExpiresAt: time.Now().Add(sellDepositTTL),
 		RequestID:         requestID(r),
 		PixCpf:            req.PixCpf,
 		PixPhone:          req.PixPhone,
