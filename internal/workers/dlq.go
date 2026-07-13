@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"payment-gateway/internal/database"
 )
 
 // DLQEntry represents a failed event that could not be processed after all retries.
@@ -30,6 +32,26 @@ func NewDLQ(maxSize int, dbSink func(DLQEntry)) *DeadLetterQueue {
 		maxSize = 10_000
 	}
 	return &DeadLetterQueue{maxSize: maxSize, dbSink: dbSink}
+}
+
+func NewPersistentDLQ(db *database.DB, maxSize int) *DeadLetterQueue {
+	if db == nil {
+		return NewDLQ(maxSize, nil)
+	}
+	return NewDLQ(maxSize, func(entry DLQEntry) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := db.SaveWorkerDLQ(ctx,
+			entry.OriginalEvent.Type,
+			entry.OriginalEvent.OrderID,
+			entry.Attempts,
+			entry.Reason,
+			entry.OriginalEvent.Payload,
+			entry.FailedAt,
+		); err != nil {
+			slog.Error("DLQ: failed to persist event", "type", entry.OriginalEvent.Type, "order_id", entry.OriginalEvent.OrderID, "error", err)
+		}
+	})
 }
 
 // Push adds an entry to the DLQ and logs a warning.
