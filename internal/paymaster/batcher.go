@@ -170,6 +170,136 @@ func (rb *RelayBatcher) dispatchBatch(ctx context.Context, batch []relayJob) {
 
 // ── signerTransferPayload matches the existing signer /hd/transfer contract ──
 
+func (rb *RelayBatcher) canMulticall(batch []relayJob) bool {
+        if len(batch) < 2 || strings.TrimSpace(rb.multicall) == "" {
+                return false
+        }
+        network := strings.ToUpper(strings.TrimSpace(batch[0].network))
+        token := strings.ToLower(strings.TrimSpace(batch[0].token))
+        if network == "" || token == "" || !isHexAddressString(token) || !isHexAddressString(rb.multicall) {
+                return false
+        }
+        for _, job := range batch {
+                if strings.ToUpper(strings.TrimSpace(job.network)) != network {
+                        return false
+                }
+                if strings.ToLower(strings.TrimSpace(job.token)) != token {
+                        return false
+                }
+                if !isHexAddressString(job.to) || strings.TrimSpace(job.amount) == "" || strings.TrimSpace(job.amount) == "0" {
+                        return false
+                }
+        }
+        return true
+}
+
+func (rb *RelayBatcher) dispatchMulticallBatch(ctx context.Context, batch []relayJob) {
+        payload, err := rb.buildMulticallPayload(batch)
+        if err != nil {
+                slog.Warn("relay batcher: multicall build failed, falling back to individual dispatch", "error", err)
+                for _, job := range batch {
+                        rb.dispatchOne(ctx, job)
+                }
+                return
+        }
+
+        cfg := DefaultRetryConfig()
+        err = ExecuteWithRetry(ctx, cfg, "relay:multicall:"+payload.IdempotencyKey, func(ctx context.Context) error {
+                return rb.signerContractCall(ctx, payload)
+        })
+        if err != nil {
+                slog.Error("relay batcher: multicall dispatch failed", "error", err, "batch_size", len(batch), "idempotency_key", payload.IdempotencyKey)
+                for _, job := range batch {
+                        if rb.retryFn != nil {
+                                rb.retryFn(ctx, job.relayID, err.Error())
+                        }
+                }
+                return
+        }
+
+        slog.Info("relay batcher: multicall dispatched", "batch_size", len(batch), "idempotency_key", payload.IdempotencyKey, "amount", payload.Amount)
+}
+
+func (rb *RelayBatcher) buildMulticallPayload(batch []relayJob) (signerContractCallPayload, error) {
+        if len(batch) < 2 {
+                return signerContractCallPayload{}, fmt.Errorf("batch pequeno demais")
+        }
+        network := strings.ToUpper(strings.TrimSpace(batch[0].network))
+        token := strings.TrimSpace(batch[0].token)
+        decimals := tokenDecimalsForNetwork(network)
+        var calls []multicall3Call
+        totalAudit := big.NewInt(0)
+        var ids []string
+
+        for _, job := range batch {
+                ids = append(ids, job.relayID)
+                netAmount := strings.TrimSpace(job.amount)
+                feeAmount := ""
+
+                if rb.relayer != nil && netAmount != "" && netAmount != "0" {
+                        plan, err := rb.relayer.Plan(netAmount)
+                        if err != nil {
+                                return signerContractCallPayload{}, fmt.Errorf("spread plan %s: %w", job.relayID, err)
+                        }
+                        netAmount = microUSDTToString(plan.NetMicro)
+                        if rb.relayer.HasFeeDestination() && plan.FeeMicro.Sign() > 0 {
+                                feeAmount = microUSDTToString(plan.FeeMicro)
+                        }
+                        slog.Info("[Paymaster] multicall relay split computed",
+                                "relay_id", job.relayID,
+                                "total_usdt", plan.TotalUSDT,
+                                "net_usdt", plan.NetUSDT,
+                                "fee_usdt", plan.FeeUSDT,
+                                "spread_bps", plan.SpreadBps,
+                                "hot_wallet", rb.relayer.FeeDestination(),
+                        )
+                }
+
+                netUnits, err := decimalToTokenUnits(netAmount, decimals)
+                if err != nil {
+                        return signerContractCallPayload{}, fmt.Errorf("net amount %s: %w", job.relayID, err)
+                }
+                if netUnits.Sign() <= 0 {
+                        return signerContractCallPayload{}, fmt.Errorf("net amount zero: %s", job.relayID)
+                }
+                calls = append(calls, multicall3Call{
+                        Target:       token,
+                        AllowFailure: false,
+                        CallData:     encodeERC20Transfer(job.to, netUnits.Bytes()),
+                })
+
+                auditUnits, err := decimalToTokenUnits(job.amount, 6)
+                if err != nil {
+                        return signerContractCallPayload{}, fmt.Errorf("audit amount %s: %w", job.relayID, err)
+                }
+                totalAudit.Add(totalAudit, auditUnits)
+
+                if feeAmount != "" {
+                        feeUnits, err := decimalToTokenUnits(feeAmount, decimals)
+                        if err != nil {
+                                return signerContractCallPayload{}, fmt.Errorf("fee amount %s: %w", job.relayID, err)
+                        }
+                        if feeUnits.Sign() > 0 {
+                                calls = append(calls, multicall3Call{
+                                        Target:       token,
+                                        AllowFailure: false,
+                                        CallData:     encodeERC20Transfer(rb.relayer.FeeDestination(), feeUnits.Bytes()),
+                                })
+                        }
+                }
+        }
+
+        return signerContractCallPayload{
+                DerivationIndex: 0,
+                To:              strings.ToLower(strings.TrimSpace(rb.multicall)),
+                Data:            "0x" + encodeMulticall3(calls),
+                Network:         network,
+                IdempotencyKey:  "multicall_" + strings.Join(ids, "_"),
+                Amount:          tokenUnitsToDecimal(totalAudit, 6),
+                TokenContract:   token,
+        }, nil
+}
+
 type signerTransferPayload struct {
         DerivationIndex int    `json:"derivationIndex"`
         To              string `json:"to"`
