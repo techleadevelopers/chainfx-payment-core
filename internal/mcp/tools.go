@@ -1642,6 +1642,12 @@ func (s *Server) toolGetM2MPaymentIntent(ctx context.Context, args map[string]an
 	if intent.EfiStatus != nil {
 		out["efi_status"] = *intent.EfiStatus
 	}
+	if intent.SettlementReceiptURL != "" {
+		out["settlement_receipt_url"] = intent.SettlementReceiptURL
+	}
+	if intent.SettlementReceiptNote != "" {
+		out["settlement_receipt_note"] = intent.SettlementReceiptNote
+	}
 	if intent.ErrorMessage != nil {
 		out["error_message"] = *intent.ErrorMessage
 	}
