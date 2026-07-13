@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/big"
 	"strings"
 	"time"
@@ -192,12 +193,13 @@ func (ow *OnchainWorker) poll(ctx context.Context, network onchainNetworkConfig)
 		return
 	}
 
-	// Build address→orderIDs map from sell/swap orders.
-	addrSet := make(map[string][]string, len(pendingOrders))
+	// Build address→orders map from sell/swap orders. A shared hot wallet can
+	// have multiple pending sell orders; matching must not fan out one tx to all.
+	addrSet := make(map[string][]models.Order, len(pendingOrders))
 	for _, o := range pendingOrders {
 		if o.Address != "" {
 			key := strings.ToLower(o.Address)
-			addrSet[key] = append(addrSet[key], o.ID)
+			addrSet[key] = append(addrSet[key], o)
 		}
 	}
 
@@ -247,7 +249,7 @@ func (ow *OnchainWorker) poll(ctx context.Context, network onchainNetworkConfig)
 			continue
 		}
 		toAddr := strings.ToLower(common.HexToAddress(log.Topics[2].Hex()).Hex())
-		orderIDs, ok := addrSet[toAddr]
+		orders, ok := addrSet[toAddr]
 		if !ok {
 			continue
 		}
@@ -276,9 +278,11 @@ func (ow *OnchainWorker) poll(ctx context.Context, network onchainNetworkConfig)
 		}
 
 		// ── Regular sell-order deposit ────────────────────────────────────────
-		for _, orderID := range orderIDs {
-			ow.confirmDeposit(ctx, network, orderID, log.TxHash.Hex(), rawAmount, log.BlockNumber)
+		if len(orders) == 1 {
+			ow.confirmDeposit(ctx, network, orders[0].ID, log.TxHash.Hex(), rawAmount, log.BlockNumber)
+			continue
 		}
+		ow.matchSharedSellDeposit(ctx, network, orders, log.TxHash.Hex(), rawAmount, log.BlockNumber)
 	}
 
 	if safeToBlock > fromBlock {
@@ -398,6 +402,76 @@ func (ow *OnchainWorker) matchM2MDeposit(ctx context.Context, network onchainNet
 	})
 }
 
+func tokenAmountFloat(rawAmount *big.Int, decimals int) float64 {
+	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+	amount, _ := new(big.Float).Quo(new(big.Float).SetInt(rawAmount), divisor).Float64()
+	return amount
+}
+
+func (ow *OnchainWorker) depositTolerance() float64 {
+	tol := ow.cfg.BscDepositTolerancePct
+	if tol <= 0 {
+		tol = 0.02
+	}
+	return tol
+}
+
+func (ow *OnchainWorker) matchSharedSellDeposit(ctx context.Context, network onchainNetworkConfig, orders []models.Order, txHash string, rawAmount *big.Int, blockNum uint64) {
+	amountFloat := tokenAmountFloat(rawAmount, network.TokenDecimals)
+	tol := ow.depositTolerance()
+
+	type candidate struct {
+		order   models.Order
+		diffAbs float64
+	}
+	var candidates []candidate
+	for _, order := range orders {
+		if order.Status != models.StatusAguardandoDeposito &&
+			order.Status != models.StatusAguardandoValidacao {
+			continue
+		}
+		if !strings.EqualFold(order.Network, network.Name) || order.AmountUSDT <= 0 {
+			continue
+		}
+		relativeDiff := (amountFloat - order.AmountUSDT) / order.AmountUSDT
+		if math.Abs(relativeDiff) <= tol {
+			candidates = append(candidates, candidate{order: order, diffAbs: math.Abs(relativeDiff)})
+		}
+	}
+
+	if len(candidates) == 1 {
+		ow.confirmDeposit(ctx, network, candidates[0].order.ID, txHash, rawAmount, blockNum)
+		return
+	}
+
+	eventType := "order.deposit_unmatched"
+	message := "deposito em carteira compartilhada sem ordem compativel; suporte deve reconciliar"
+	incidentOrders := orders
+	if len(candidates) > 1 {
+		eventType = "order.deposit_ambiguous"
+		message = "deposito em carteira compartilhada compativel com multiplas ordens; liquidacao automatica bloqueada"
+		incidentOrders = make([]models.Order, 0, len(candidates))
+		for _, c := range candidates {
+			incidentOrders = append(incidentOrders, c.order)
+		}
+	}
+
+	slog.Warn("OnchainWorker: sell deposit requires manual reconciliation",
+		"network", network.Name, "tx", txHash, "amount_usdt", amountFloat,
+		"candidate_count", len(candidates), "pending_orders", len(orders), "reason", message)
+
+	for _, order := range incidentOrders {
+		_ = ow.db.AddEvent(ctx, order.ID, "order.incident", map[string]any{
+			"type":          eventType,
+			"reason":        message,
+			"depositTx":     txHash,
+			"depositAmount": amountFloat,
+			"block":         blockNum,
+			"network":       network.Name,
+		})
+	}
+}
+
 func (ow *OnchainWorker) confirmDeposit(ctx context.Context, network onchainNetworkConfig, orderID, txHash string, rawAmount *big.Int, blockNum uint64) {
 	cCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -419,13 +493,8 @@ func (ow *OnchainWorker) confirmDeposit(ctx context.Context, network onchainNetw
 		return
 	}
 
-	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(network.TokenDecimals)), nil))
-	amountFloat, _ := new(big.Float).Quo(new(big.Float).SetInt(rawAmount), divisor).Float64()
-
-	tol := ow.cfg.BscDepositTolerancePct
-	if tol <= 0 {
-		tol = 0.02
-	}
+	amountFloat := tokenAmountFloat(rawAmount, network.TokenDecimals)
+	tol := ow.depositTolerance()
 	if order.AmountUSDT > 0 {
 		diff := (amountFloat - order.AmountUSDT) / order.AmountUSDT
 		if diff < -tol {
