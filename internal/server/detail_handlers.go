@@ -14,11 +14,12 @@ import (
 // ─── Agent Detail ─────────────────────────────────────────────────────────────
 
 func (s *Server) handleAppAgentDetail(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorizeChainFX(w, r); !ok {
+	auth, ok := s.authorizeChainFX(w, r)
+	if !ok {
 		return
 	}
 	id := r.PathValue("id")
-	detail, err := s.db.GetAgentDetail(r.Context(), id)
+	detail, err := s.db.GetAgentDetailForProject(r.Context(), auth.ProjectID, id)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -42,10 +43,11 @@ func (s *Server) handleAppAgentDetail(w http.ResponseWriter, r *http.Request) {
 // ─── Purchase Detail ──────────────────────────────────────────────────────────
 
 func (s *Server) handleAppPurchaseDetail(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorizeChainFX(w, r); !ok {
+	auth, ok := s.authorizeChainFX(w, r)
+	if !ok {
 		return
 	}
-	detail, err := s.db.GetPurchaseDetail(r.Context(), r.PathValue("id"))
+	detail, err := s.db.GetPurchaseDetailForProject(r.Context(), auth.ProjectID, r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -64,10 +66,11 @@ func (s *Server) handleAppPurchaseDetail(w http.ResponseWriter, r *http.Request)
 // ─── Execution Detail ─────────────────────────────────────────────────────────
 
 func (s *Server) handleAppExecutionDetail(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorizeChainFX(w, r); !ok {
+	auth, ok := s.authorizeChainFX(w, r)
+	if !ok {
 		return
 	}
-	exec, err := s.db.GetExecutionDetail(r.Context(), r.PathValue("id"))
+	exec, err := s.db.GetExecutionDetailForProject(r.Context(), auth.ProjectID, r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
 		return
