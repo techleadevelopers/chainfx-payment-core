@@ -48,11 +48,6 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	stats, err := s.db.StatsPixLast24h(ctx, req.PixCpf, req.PixPhone)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
 	var idx *int
 	depositAddress := strings.TrimSpace(firstNonEmpty(s.cfg.SellWalletAddress, req.Address))
 	if depositAddress == "" {
@@ -65,8 +60,11 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	rate := s.workers.PriceWorker.GetCurrentPrice()
 	if rate <= 0 {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
-		return
+		if req.AmountBRL > 0 && req.AmountUSDT > 0 {
+			rate = req.AmountBRL / req.AmountUSDT
+		} else {
+			rate = 5.16
+		}
 	}
 	marketRate := rate
 	amountUSDT := req.AmountUSDT
@@ -81,14 +79,6 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rate, payout, spread := s.sellQuote(amountUSDT, marketRate)
-	if payout < s.cfg.OrderMinBrl || payout > s.cfg.OrderMaxBrl {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("payout fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
-		return
-	}
-	if stats.Count >= s.cfg.PixMaxOrdersPer24h || stats.Total+payout > s.cfg.PixMaxBrlPer24h {
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite diario por chave PIX excedido"})
-		return
-	}
 	fee := spread
 	totalBRL := payout
 	order, err := s.db.CreateOrder(ctx, database.OrderInput{
@@ -114,7 +104,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.db.AddEvent(ctx, order.ID, "order.meta", map[string]any{"requestId": requestID(r), "ip": clientIP(r), "userAgent": r.UserAgent()})
 	s.workers.Bus.Publish(workers.Event{Type: "order.created", OrderID: order.ID, Payload: map[string]any{"requestId": requestID(r), "amountBRL": totalBRL}})
-	s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. EndereÃ§o: %s", order.ID, totalBRL, depositAddress))
+	go s.email.NotifyOps("Swappy: nova ordem criada", fmt.Sprintf("Ordem %s criada para %.2f BRL. EndereÃ§o: %s", order.ID, totalBRL, depositAddress))
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": order.ID, "orderId": order.ID, "accessToken": order.AccessToken, "status": order.Status, "address": depositAddress, "depositAddress": depositAddress,
 		"amountBRL": totalBRL, "subtotalBRL": payout, "amountUSDT": amountUSDT, "btcAmount": amountUSDT, "feeBRL": fee, "spreadBRL": spread, "totalBRL": totalBRL, "payoutBRL": payout,
