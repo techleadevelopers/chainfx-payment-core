@@ -237,72 +237,101 @@ type toolCallRequest struct {
 }
 
 func (s *Server) handleToolsCall(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
+	s.handleToolsCallWithAuthorize(nil)(w, r)
+}
 
-	// ── Per-API-key rate limiting ─────────────────────────────────────────────
-	apiKey := mcpAPIKey(r)
-	keyHash := shortMCPSecretHash(apiKey)
-	if keyHash == "" {
-		// Anonymous: bucket by client IP
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.SplitN(xff, ",", 2)
-			keyHash = "anon:" + strings.TrimSpace(parts[0])
-		} else {
-			addr := r.RemoteAddr
-			if idx := strings.LastIndex(addr, ":"); idx != -1 {
-				addr = addr[:idx]
+func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// ── Per-API-key rate limiting ─────────────────────────────────────────────
+		apiKey := mcpAPIKey(r)
+		keyHash := shortMCPSecretHash(apiKey)
+		if keyHash == "" {
+			// Anonymous: bucket by client IP
+			if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+				parts := strings.SplitN(xff, ",", 2)
+				keyHash = "anon:" + strings.TrimSpace(parts[0])
+			} else {
+				addr := r.RemoteAddr
+				if idx := strings.LastIndex(addr, ":"); idx != -1 {
+					addr = addr[:idx]
+				}
+				keyHash = "anon:" + addr
 			}
-			keyHash = "anon:" + addr
 		}
-	}
-	limit := tierLimit(apiKey)
-	allowed, remaining, resetAt := s.rl.allow(keyHash, limit)
-	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
-	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
-	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
-	if !allowed {
-		retryAfter := int(time.Until(resetAt).Seconds())
-		if retryAfter < 1 {
-			retryAfter = 1
+		limit := tierLimit(apiKey)
+		allowed, remaining, resetAt := s.rl.allow(keyHash, limit)
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
+		if !allowed {
+			retryAfter := int(time.Until(resetAt).Seconds())
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			metrics.IncMCPRateLimited()
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error":      fmt.Sprintf("rate limit exceeded: %d calls/minute allowed for this key tier", limit),
+				"retryAfter": retryAfter,
+				"resetAt":    resetAt.UTC().Format(time.RFC3339),
+			})
+			return
 		}
-		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-		metrics.IncMCPRateLimited()
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{
-			"error":      fmt.Sprintf("rate limit exceeded: %d calls/minute allowed for this key tier", limit),
-			"retryAfter": retryAfter,
-			"resetAt":    resetAt.UTC().Format(time.RFC3339),
-		})
-		return
-	}
 
-	// ── Dispatch ──────────────────────────────────────────────────────────────
-	// Inject the raw API key into the context so tool implementations can
-	// read it via mcpAPIKeyFromCtx (used for IDOR-safe webhook listing).
-	ctx := context.WithValue(r.Context(), mcpAPIKeyCtxKey{}, apiKey)
-	r = r.WithContext(ctx)
+		// ── Dispatch ──────────────────────────────────────────────────────────────
+		// Inject the raw API key into the context so tool implementations can
+		// read it via mcpAPIKeyFromCtx (used for IDOR-safe webhook listing).
+		ctx := context.WithValue(r.Context(), mcpAPIKeyCtxKey{}, apiKey)
+		r = r.WithContext(ctx)
 
-	var req toolCallRequest
-	if err := decodeJSON(r, &req); err != nil {
-		s.recordMCPToolLog(r, "", "error", "invalid_json", time.Since(start))
-		writeMCPError(w, http.StatusBadRequest, "JSON inválido")
-		return
-	}
-	result, err := s.callTool(r.Context(), req.Name, req.Arguments)
-	if err != nil {
-		s.recordMCPToolLog(r, req.Name, "error", err.Error(), time.Since(start))
-		metrics.IncMCPToolCall("error")
+		var req toolCallRequest
+		if err := decodeJSON(r, &req); err != nil {
+			s.recordMCPToolLog(r, "", "error", "invalid_json", time.Since(start))
+			writeMCPError(w, http.StatusBadRequest, "JSON inválido")
+			return
+		}
+		if !isPublicMCPTool(req.Name) && authorize != nil {
+			if !authorize(w, r) {
+				s.recordMCPToolLog(r, req.Name, "error", "unauthorized", time.Since(start))
+				return
+			}
+		}
+		result, err := s.callTool(r.Context(), req.Name, req.Arguments)
+		if err != nil {
+			s.recordMCPToolLog(r, req.Name, "error", err.Error(), time.Since(start))
+			metrics.IncMCPToolCall("error")
+			writeJSON(w, http.StatusOK, map[string]any{
+				"isError": true,
+				"content": []map[string]any{{"type": "text", "text": err.Error()}},
+			})
+			return
+		}
+		s.recordMCPToolLog(r, req.Name, "ok", "", time.Since(start))
+		metrics.IncMCPToolCall("ok")
 		writeJSON(w, http.StatusOK, map[string]any{
-			"isError": true,
-			"content": []map[string]any{{"type": "text", "text": err.Error()}},
+			"isError": false,
+			"content": []map[string]any{{"type": "json", "json": result}},
 		})
-		return
 	}
-	s.recordMCPToolLog(r, req.Name, "ok", "", time.Since(start))
-	metrics.IncMCPToolCall("ok")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"isError": false,
-		"content": []map[string]any{{"type": "json", "json": result}},
-	})
+}
+
+func isPublicMCPTool(name string) bool {
+	switch name {
+	case "get_rates",
+		"searchCapabilities",
+		"listCapabilities",
+		"getCapability",
+		"getCapabilityContract",
+		"chooseRoute",
+		"listAssets",
+		"quote",
+		"list_webhook_events":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) recordMCPToolLog(r *http.Request, toolName, status, errorMessage string, duration time.Duration) {
