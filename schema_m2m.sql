@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS agent_payment_intents (
     agent_wallet        TEXT        NOT NULL,
     payment_type        TEXT        NOT NULL CHECK (payment_type IN ('pix','credit_card')),
     pix_key             TEXT,                             -- destination PIX key (required when payment_type='pix')
+    payment_link        TEXT,                             -- destination payment URL for credit-card/bill rails
+    barcode             TEXT,                             -- barcode/linha digitavel for invoice/card bill payment
+    beneficiary_name    TEXT,                             -- beneficiary/merchant name for operator/provider checks
+    due_date            TEXT,                             -- optional due date supplied by the agent
     amount_brl          NUMERIC(18,2) NOT NULL,           -- net BRL that will be paid to the recipient
     fee_bps             INT          NOT NULL,            -- fee in basis-points applied (1000=10%, 1900=19%)
     fee_usdt            NUMERIC(18,6) NOT NULL,           -- fee portion in USDT charged to agent
