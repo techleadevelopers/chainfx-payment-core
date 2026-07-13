@@ -1,79 +1,79 @@
 package mobile
 
 import (
-	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
-	"time"
+        "context"
+        "crypto/hmac"
+        "crypto/rand"
+        "crypto/sha256"
+        "encoding/base64"
+        "encoding/json"
+        "fmt"
+        "net/http"
+        "strings"
+        "time"
 
-	"golang.org/x/crypto/bcrypt"
+        "golang.org/x/crypto/bcrypt"
 )
 
 // ─── JWT (HS256, stdlib only) ─────────────────────────────────────────────────
 
 type jwtClaims struct {
-	Sub  string `json:"sub"`
-	Exp  int64  `json:"exp"`
-	Iat  int64  `json:"iat"`
-	Type string `json:"type"` // "access" | "refresh"
+        Sub  string `json:"sub"`
+        Exp  int64  `json:"exp"`
+        Iat  int64  `json:"iat"`
+        Type string `json:"type"` // "access" | "refresh"
 }
 
 func b64url(b []byte) string {
-	return base64.RawURLEncoding.EncodeToString(b)
+        return base64.RawURLEncoding.EncodeToString(b)
 }
 
 func issueToken(secret string, claims jwtClaims) (string, error) {
-	header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	body := header + "." + b64url(payload)
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(body))
-	return body + "." + b64url(mac.Sum(nil)), nil
+        header := b64url([]byte(`{"alg":"HS256","typ":"JWT"}`))
+        payload, err := json.Marshal(claims)
+        if err != nil {
+                return "", err
+        }
+        body := header + "." + b64url(payload)
+        mac := hmac.New(sha256.New, []byte(secret))
+        mac.Write([]byte(body))
+        return body + "." + b64url(mac.Sum(nil)), nil
 }
 
 func verifyToken(secret, token string) (*jwtClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid token format")
-	}
-	body := parts[0] + "." + parts[1]
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(body))
-	expected := b64url(mac.Sum(nil))
-	if !hmac.Equal([]byte(parts[2]), []byte(expected)) {
-		return nil, fmt.Errorf("invalid signature")
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, err
-	}
-	var claims jwtClaims
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		return nil, err
-	}
-	if time.Now().Unix() > claims.Exp {
-		return nil, fmt.Errorf("token expired")
-	}
-	return &claims, nil
+        parts := strings.Split(token, ".")
+        if len(parts) != 3 {
+                return nil, fmt.Errorf("invalid token format")
+        }
+        body := parts[0] + "." + parts[1]
+        mac := hmac.New(sha256.New, []byte(secret))
+        mac.Write([]byte(body))
+        expected := b64url(mac.Sum(nil))
+        if !hmac.Equal([]byte(parts[2]), []byte(expected)) {
+                return nil, fmt.Errorf("invalid signature")
+        }
+        raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+        if err != nil {
+                return nil, err
+        }
+        var claims jwtClaims
+        if err := json.Unmarshal(raw, &claims); err != nil {
+                return nil, err
+        }
+        if time.Now().Unix() > claims.Exp {
+                return nil, fmt.Errorf("token expired")
+        }
+        return &claims, nil
 }
 
 func (s *Server) newAccessToken(userID string) (string, error) {
-	exp := time.Now().Add(time.Duration(s.mcfg.JWTExpiresMin) * time.Minute).Unix()
-	return issueToken(s.mcfg.JWTSecret, jwtClaims{Sub: userID, Exp: exp, Iat: time.Now().Unix(), Type: "access"})
+        exp := time.Now().Add(time.Duration(s.mcfg.JWTExpiresMin) * time.Minute).Unix()
+        return issueToken(s.mcfg.JWTSecret, jwtClaims{Sub: userID, Exp: exp, Iat: time.Now().Unix(), Type: "access"})
 }
 
 func (s *Server) newRefreshToken(userID string) (string, error) {
-	exp := time.Now().Add(time.Duration(s.mcfg.RefreshExpiresDays) * 24 * time.Hour).Unix()
-	return issueToken(s.mcfg.RefreshSecret, jwtClaims{Sub: userID, Exp: exp, Iat: time.Now().Unix(), Type: "refresh"})
+        exp := time.Now().Add(time.Duration(s.mcfg.RefreshExpiresDays) * 24 * time.Hour).Unix()
+        return issueToken(s.mcfg.RefreshSecret, jwtClaims{Sub: userID, Exp: exp, Iat: time.Now().Unix(), Type: "refresh"})
 }
 
 // requireAuth middleware — injects user ID into context.
@@ -81,133 +81,145 @@ type contextKey string
 const ctxUserID contextKey = "uid"
 
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token não informado"})
-			return
-		}
-		claims, err := verifyToken(s.mcfg.JWTSecret, auth[7:])
-		if err != nil || claims.Type != "access" {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token inválido ou expirado"})
-			return
-		}
-		ctx := context.WithValue(r.Context(), ctxUserID, claims.Sub)
-		next(w, r.WithContext(ctx))
-	}
+        return func(w http.ResponseWriter, r *http.Request) {
+                auth := r.Header.Get("Authorization")
+                if !strings.HasPrefix(auth, "Bearer ") {
+                        writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token não informado"})
+                        return
+                }
+                claims, err := verifyToken(s.mcfg.JWTSecret, auth[7:])
+                if err != nil || claims.Type != "access" {
+                        writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token inválido ou expirado"})
+                        return
+                }
+                ctx := context.WithValue(r.Context(), ctxUserID, claims.Sub)
+                next(w, r.WithContext(ctx))
+        }
 }
 
 func userIDFromCtx(r *http.Request) string {
-	v, _ := r.Context().Value(ctxUserID).(string)
-	return v
+        v, _ := r.Context().Value(ctxUserID).(string)
+        return v
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		FullName string `json:"full_name"`
-		Phone    string `json:"phone"`
-	}
-	if err := decodeJSON(r, &req); err != nil || req.Email == "" || req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email e password obrigatórios"})
-		return
-	}
-	if len(req.Password) < 8 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password deve ter no mínimo 8 caracteres"})
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
-		return
-	}
-	user, err := mobileDB(s.db).CreateUser(r.Context(), req.Email, string(hash), req.FullName, req.Phone)
-	if err != nil {
-		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "email já cadastrado"})
-			return
-		}
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	access, _ := s.newAccessToken(user.ID)
-	refresh, _ := s.newRefreshToken(user.ID)
-	_ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"user":         sanitizeUser(user),
-		"accessToken":  access,
-		"refreshToken": refresh,
-	})
+        var req struct {
+                Email    string `json:"email"`
+                Password string `json:"password"`
+                FullName string `json:"full_name"`
+                Phone    string `json:"phone"`
+        }
+        if err := decodeJSON(r, &req); err != nil || req.Email == "" || req.Password == "" {
+                writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email e password obrigatórios"})
+                return
+        }
+        if len(req.Password) < 8 {
+                writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password deve ter no mínimo 8 caracteres"})
+                return
+        }
+        hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+        if err != nil {
+                writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
+                return
+        }
+        user, err := mobileDB(s.db).CreateUser(r.Context(), req.Email, string(hash), req.FullName, req.Phone)
+        if err != nil {
+                if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
+                        writeJSON(w, http.StatusConflict, map[string]any{"error": "email já cadastrado"})
+                        return
+                }
+                writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+                return
+        }
+        access, _ := s.newAccessToken(user.ID)
+        refresh, _ := s.newRefreshToken(user.ID)
+        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
+        writeJSON(w, http.StatusCreated, map[string]any{
+                "user":         sanitizeUser(user),
+                "accessToken":  access,
+                "refreshToken": refresh,
+        })
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := decodeJSON(r, &req); err != nil || req.Email == "" || req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email e password obrigatórios"})
-		return
-	}
-	user, err := mobileDB(s.db).GetUserByEmail(r.Context(), req.Email)
-	if err != nil || user == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "credenciais inválidas"})
-		return
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "credenciais inválidas"})
-		return
-	}
-	access, _ := s.newAccessToken(user.ID)
-	refresh, _ := s.newRefreshToken(user.ID)
-	_ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"user":         sanitizeUser(user),
-		"accessToken":  access,
-		"refreshToken": refresh,
-	})
+        var req struct {
+                Email    string `json:"email"`
+                Password string `json:"password"`
+        }
+        if err := decodeJSON(r, &req); err != nil || req.Email == "" || req.Password == "" {
+                writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email e password obrigatórios"})
+                return
+        }
+        user, err := mobileDB(s.db).GetUserByEmail(r.Context(), req.Email)
+        if err != nil || user == nil {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "credenciais inválidas"})
+                return
+        }
+        if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "credenciais inválidas"})
+                return
+        }
+        access, _ := s.newAccessToken(user.ID)
+        refresh, _ := s.newRefreshToken(user.ID)
+        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
+        writeJSON(w, http.StatusOK, map[string]any{
+                "user":         sanitizeUser(user),
+                "accessToken":  access,
+                "refreshToken": refresh,
+        })
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		RefreshToken string `json:"refreshToken"`
-	}
-	if err := decodeJSON(r, &req); err != nil || req.RefreshToken == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "refreshToken obrigatório"})
-		return
-	}
-	claims, err := verifyToken(s.mcfg.RefreshSecret, req.RefreshToken)
-	if err != nil || claims.Type != "refresh" {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "refresh token inválido ou expirado"})
-		return
-	}
-	user, err := mobileDB(s.db).GetUserByID(r.Context(), claims.Sub)
-	if err != nil || user == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "usuário não encontrado"})
-		return
-	}
-	access, _ := s.newAccessToken(user.ID)
-	newRefresh, _ := s.newRefreshToken(user.ID)
-	_ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, newRefresh)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"accessToken":  access,
-		"refreshToken": newRefresh,
-	})
+        var req struct {
+                RefreshToken string `json:"refreshToken"`
+        }
+        if err := decodeJSON(r, &req); err != nil || req.RefreshToken == "" {
+                writeJSON(w, http.StatusBadRequest, map[string]any{"error": "refreshToken obrigatório"})
+                return
+        }
+        claims, err := verifyToken(s.mcfg.RefreshSecret, req.RefreshToken)
+        if err != nil || claims.Type != "refresh" {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "refresh token inválido ou expirado"})
+                return
+        }
+        user, err := mobileDB(s.db).GetUserByID(r.Context(), claims.Sub)
+        if err != nil || user == nil {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "usuário não encontrado"})
+                return
+        }
+        // C-05: validate refresh token against stored bcrypt hash.
+        // Without this check a revoked token (after logout or password change)
+        // remains valid for its full 7-day TTL — anyone with the token can still
+        // obtain new access tokens even after the user has logged out.
+        if user.RefreshTokenHash == nil || *user.RefreshTokenHash == "" {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sessão encerrada — faça login novamente"})
+                return
+        }
+        if err := bcrypt.CompareHashAndPassword([]byte(*user.RefreshTokenHash), []byte(req.RefreshToken)); err != nil {
+                writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sessão inválida — faça login novamente"})
+                return
+        }
+        access, _ := s.newAccessToken(user.ID)
+        newRefresh, _ := s.newRefreshToken(user.ID)
+        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, newRefresh)
+        writeJSON(w, http.StatusOK, map[string]any{
+                "accessToken":  access,
+                "refreshToken": newRefresh,
+        })
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	uid := userIDFromCtx(r)
-	_ = mobileDB(s.db).ClearRefreshToken(r.Context(), uid)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+        uid := userIDFromCtx(r)
+        _ = mobileDB(s.db).ClearRefreshToken(r.Context(), uid)
+        writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func randomHex(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x", b)
+        b := make([]byte, n)
+        _, _ = rand.Read(b)
+        return fmt.Sprintf("%x", b)
 }
