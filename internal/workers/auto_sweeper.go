@@ -153,8 +153,20 @@ func (w *AutoSweeperWorker) executeSweep(ctx context.Context) {
 		"cold_wallet", w.cfg.TreasuryCold,
 	)
 
+	blockNumber, err := w.pool.BlockNumber(ctx)
+	if err != nil {
+		slog.Error("AutoSweeperWorker: failed to read block number for idempotency", "error", err)
+		run.Status = "error"
+		errMsg := err.Error()
+		run.ErrorMsg = &errMsg
+		run.SweptUSDT = 0
+		_ = w.db.RecordAutoSweeperRun(ctx, run)
+		metrics.IncAutoSweeperError()
+		return
+	}
+
 	// 4. Dispatch sweep via signer.
-	txHash, err := w.dispatchSweep(ctx, sweepAmount)
+	txHash, err := w.dispatchSweep(ctx, sweepAmount, blockNumber)
 	if err != nil {
 		slog.Error("AutoSweeperWorker: sweep dispatch failed", "error", err)
 		run.Status = "error"
@@ -234,11 +246,12 @@ type sweepPayload struct {
 }
 
 // dispatchSweep calls the signer to transfer sweepAmount USDT to the cold wallet.
-func (w *AutoSweeperWorker) dispatchSweep(ctx context.Context, amount float64) (string, error) {
+func (w *AutoSweeperWorker) dispatchSweep(ctx context.Context, amount float64, blockNumber uint64) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	idempotencyKey := fmt.Sprintf("autosweep-%d", time.Now().UnixNano())
+	hotWallet := strings.ToLower(strings.TrimSpace(w.cfg.TreasuryHot))
+	idempotencyKey := fmt.Sprintf("sweep-%s-%d", hotWallet, blockNumber)
 	payload := sweepPayload{
 		DerivationIndex: 0,
 		To:              w.cfg.TreasuryCold,
