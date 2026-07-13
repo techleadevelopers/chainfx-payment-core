@@ -125,6 +125,10 @@ func (s *Server) Handler() http.Handler {
         mux.HandleFunc("GET /v1/gas/relay/{id}", s.handleGasRelayGet)
         mux.HandleFunc("GET /api/admin/gas-station", s.handleAdminGasStation)
         mux.HandleFunc("GET /api/admin/sweeper", s.handleAdminSweeper)
+        // ── Chaos / Adversarial Admin ─────────────────────────────────────────────
+        mux.HandleFunc("POST /v1/admin/gas/chaos-run", s.handleTriggerChaos)
+        mux.HandleFunc("GET /v1/admin/gas/chaos-history", s.handleChaosHistory)
+        mux.HandleFunc("GET /admin/chaos", s.handleAdminChaosPage)
         // ─────────────────────────────────────────────────────────────────────────
         mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, map[string]any{"ok": true}) })
         mux.HandleFunc("GET /readyz", s.handleReady)
