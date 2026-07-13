@@ -396,6 +396,58 @@ func (ow *OnchainWorker) matchM2MDeposit(ctx context.Context, network onchainNet
 	})
 }
 
+func chooseM2MDepositCandidate(candidates []database.M2MDepositMatch, depositUSDT, tol float64) (database.M2MDepositMatch, error) {
+	if len(candidates) == 0 {
+		return database.M2MDepositMatch{}, fmt.Errorf("nenhuma intent pendente")
+	}
+	if tol <= 0 {
+		tol = 0.005
+	}
+	if len(candidates) == 1 {
+		chosen := candidates[0]
+		if chosen.RequiredUSDT > 0 {
+			diff := (depositUSDT - chosen.RequiredUSDT) / chosen.RequiredUSDT
+			if diff < -tol {
+				return database.M2MDepositMatch{}, fmt.Errorf("deposito abaixo da tolerancia para %s", chosen.IntentID)
+			}
+		}
+		return chosen, nil
+	}
+
+	bestIndex := -1
+	bestDistance := math.MaxFloat64
+	secondDistance := math.MaxFloat64
+	for i, candidate := range candidates {
+		if candidate.RequiredUSDT <= 0 {
+			continue
+		}
+		diff := (depositUSDT - candidate.RequiredUSDT) / candidate.RequiredUSDT
+		if diff < -tol {
+			continue
+		}
+		distance := math.Abs(diff)
+		if distance < bestDistance {
+			secondDistance = bestDistance
+			bestDistance = distance
+			bestIndex = i
+			continue
+		}
+		if distance < secondDistance {
+			secondDistance = distance
+		}
+	}
+	if bestIndex < 0 {
+		return database.M2MDepositMatch{}, fmt.Errorf("nenhuma intent compativel com valor depositado")
+	}
+	if bestDistance > tol {
+		return database.M2MDepositMatch{}, fmt.Errorf("multiplas intents no endereco e deposito acima da tolerancia exata; reconciliacao manual")
+	}
+	if math.Abs(secondDistance-bestDistance) <= 0.000001 {
+		return database.M2MDepositMatch{}, fmt.Errorf("valor depositado ambiguo entre multiplas intents")
+	}
+	return candidates[bestIndex], nil
+}
+
 func tokenAmountFloat(rawAmount *big.Int, decimals int) float64 {
 	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
 	amount, _ := new(big.Float).Quo(new(big.Float).SetInt(rawAmount), divisor).Float64()
