@@ -20,7 +20,7 @@ type DCAWorker struct {
 }
 
 func NewDCAWorker(bus *EventBus, db *database.DB, cfg *config.Config) *DCAWorker {
-	return &DCAWorker{bus: bus, db: db, cfg: cfg, dlq: NewDLQ(500, nil)}
+	return &DCAWorker{bus: bus, db: db, cfg: cfg, dlq: NewPersistentDLQ(db, 500)}
 }
 
 func (dw *DCAWorker) Start(ctx context.Context) {
