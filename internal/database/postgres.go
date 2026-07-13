@@ -2227,6 +2227,49 @@ CREATE TABLE IF NOT EXISTS worker_dlq (
 CREATE INDEX IF NOT EXISTS idx_worker_dlq_status_failed_at ON worker_dlq(status, failed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_worker_dlq_order_id ON worker_dlq(order_id) WHERE order_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS gas_relay_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_address TEXT NOT NULL,
+  sig_r TEXT NOT NULL,
+  sig_s TEXT NOT NULL,
+  sig_hash TEXT NOT NULL UNIQUE,
+  tx_to TEXT NOT NULL,
+  tx_data TEXT NOT NULL DEFAULT '',
+  fee_usdt NUMERIC(20,8) NOT NULL DEFAULT 0,
+  gas_price_gwei NUMERIC(20,8),
+  gas_limit BIGINT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','sent','failed','dlq')),
+  tx_hash TEXT,
+  attempts INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  next_retry_at TIMESTAMPTZ,
+  dlq_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_gas_relay_requests_status ON gas_relay_requests(status);
+CREATE INDEX IF NOT EXISTS idx_gas_relay_requests_user_address ON gas_relay_requests(LOWER(user_address), created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gas_relay_requests_created_at ON gas_relay_requests(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_gas_relay_requests_retry_eligible ON gas_relay_requests(status, next_retry_at, attempts, created_at) WHERE status IN ('pending','failed');
+CREATE INDEX IF NOT EXISTS idx_gas_relay_requests_dlq ON gas_relay_requests(dlq_at DESC) WHERE status = 'dlq';
+
+CREATE TABLE IF NOT EXISTS auto_sweeper_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  network TEXT NOT NULL DEFAULT 'BSC',
+  hot_wallet TEXT NOT NULL,
+  cold_wallet TEXT NOT NULL,
+  balance_usdt NUMERIC(20,8) NOT NULL DEFAULT 0,
+  swept_usdt NUMERIC(20,8) NOT NULL DEFAULT 0,
+  tx_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok','skipped','error')),
+  error_msg TEXT,
+  ran_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auto_sweeper_runs_ran_at ON auto_sweeper_runs(ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auto_sweeper_runs_status_ran_at ON auto_sweeper_runs(status, ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auto_sweeper_runs_hot_wallet ON auto_sweeper_runs(LOWER(hot_wallet), ran_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auto_sweeper_runs_tx_hash ON auto_sweeper_runs(tx_hash) WHERE tx_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS paymaster_sig_locks (
   sig_hash TEXT PRIMARY KEY,
   acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
