@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"payment-gateway/internal/email"
+	"payment-gateway/internal/workers"
 )
 
 func (s *Server) handleInternalSweep(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +33,57 @@ func (s *Server) handleInternalSweep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "sweepId": sweep.ID})
+}
+
+func (s *Server) handleInternalM2MSettled(w http.ResponseWriter, r *http.Request) {
+	raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invalida"})
+		return
+	}
+	var req struct {
+		IntentID     string `json:"intent_id"`
+		SettlementID string `json:"settlement_id"`
+		ProviderID   string `json:"provider_id"`
+		Status       string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invalido"})
+		return
+	}
+	req.IntentID = strings.TrimSpace(req.IntentID)
+	settlementID := firstNonEmpty(strings.TrimSpace(req.SettlementID), strings.TrimSpace(req.ProviderID))
+	status := firstNonEmpty(strings.TrimSpace(req.Status), "paid")
+	if req.IntentID == "" || settlementID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "intent_id e settlement_id/provider_id sao obrigatorios"})
+		return
+	}
+	locked, tx, err := s.db.AcquireM2MSettlementLock(r.Context(), req.IntentID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !locked || tx == nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "intent em processamento por outro worker"})
+		return
+	}
+	if err := s.db.MarkM2MSettled(r.Context(), tx, req.IntentID, settlementID, status); err != nil {
+		writeError(w, err)
+		return
+	}
+	if s.workers != nil && s.workers.Bus != nil {
+		s.workers.Bus.Publish(workers.Event{
+			Type:    "m2m.settlement.done",
+			OrderID: req.IntentID,
+			Payload: map[string]any{
+				"intent_id":     req.IntentID,
+				"settlement_id": settlementID,
+				"status":        status,
+				"rail":          "credit_card",
+			},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "intent_id": req.IntentID, "status": "settled"})
 }
 
 func (s *Server) handleEmailTest(w http.ResponseWriter, r *http.Request) {
