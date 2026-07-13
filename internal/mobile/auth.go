@@ -135,7 +135,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
         }
         access, _ := s.newAccessToken(user.ID)
         refresh, _ := s.newRefreshToken(user.ID)
-        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
+	if err := mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao criar sessao"})
+		return
+	}
         writeJSON(w, http.StatusCreated, map[string]any{
                 "user":         sanitizeUser(user),
                 "accessToken":  access,
@@ -163,7 +166,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
         }
         access, _ := s.newAccessToken(user.ID)
         refresh, _ := s.newRefreshToken(user.ID)
-        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh)
+	if err := mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, refresh); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao criar sessao"})
+		return
+	}
         writeJSON(w, http.StatusOK, map[string]any{
                 "user":         sanitizeUser(user),
                 "accessToken":  access,
@@ -197,13 +203,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
                 writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sessão encerrada — faça login novamente"})
                 return
         }
-        if err := bcrypt.CompareHashAndPassword([]byte(*user.RefreshTokenHash), []byte(req.RefreshToken)); err != nil {
+	if *user.RefreshTokenHash != refreshTokenDigest(req.RefreshToken) {
                 writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "sessão inválida — faça login novamente"})
                 return
         }
         access, _ := s.newAccessToken(user.ID)
         newRefresh, _ := s.newRefreshToken(user.ID)
-        _ = mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, newRefresh)
+	if err := mobileDB(s.db).SaveRefreshToken(r.Context(), user.ID, newRefresh); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao renovar sessao"})
+		return
+	}
         writeJSON(w, http.StatusOK, map[string]any{
                 "accessToken":  access,
                 "refreshToken": newRefresh,
