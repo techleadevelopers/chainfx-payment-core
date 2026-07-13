@@ -319,6 +319,12 @@ func intentFullView(i *database.AgentPaymentIntent) map[string]any {
 	if i.EfiStatus != nil {
 		out["efi_status"] = *i.EfiStatus
 	}
+	if i.SettlementReceiptURL != "" {
+		out["settlement_receipt_url"] = i.SettlementReceiptURL
+	}
+	if i.SettlementReceiptNote != "" {
+		out["settlement_receipt_note"] = i.SettlementReceiptNote
+	}
 	if i.ErrorMessage != nil {
 		out["error_message"] = *i.ErrorMessage
 	}
