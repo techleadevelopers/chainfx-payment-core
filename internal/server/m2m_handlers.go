@@ -141,9 +141,17 @@ func (s *Server) handleM2MCreateIntent(w http.ResponseWriter, r *http.Request) {
 		req.IdempotencyKey, req.AgentWallet,
 	)
 
-	paymentAddress := strings.ToLower(strings.TrimSpace(s.cfg.TreasuryHot))
+	paymentAddress, err := s.db.PickAvailableM2MDepositAddress(
+		r.Context(),
+		splitAddressList(s.cfg.M2MDepositAddresses),
+		s.cfg.TreasuryHot,
+	)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
 	if !common.IsHexAddress(paymentAddress) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "TREASURY_HOT must be a valid EVM payment address"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "M2M payment address must be a valid EVM address"})
 		return
 	}
 
@@ -290,6 +298,12 @@ func m2mIntentID(idempotencyKey, agentWallet string) string {
 		hash = hash[:24]
 	}
 	return "int_m2m_" + hash
+}
+
+func splitAddressList(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
 }
 
 func parsePositiveFloat(s string) (float64, error) {
