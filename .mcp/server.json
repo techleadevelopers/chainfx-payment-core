@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.techleadevelopers/chainfx-mcp",
   "title": "ChainFX Capability Network",
-  "description": "AI agent capabilities, M2M PIX/card payments, stablecoin trades, metering and settlement.",
+  "description": "Capability network for AI agents, including agent-funded fiat payments: deposit USDT and ChainFX pays PIX, payment links or card bills with status and receipt.",
   "websiteUrl": "https://www.chainfx.store",
   "repository": {
     "url": "https://github.com/chainfx/payment-gateway",
@@ -36,7 +36,8 @@
     },
     "store.chainfx/product": {
       "category": "capability-marketplace",
-      "positioning": "economic infrastructure for autonomous agents",
+      "positioning": "economic infrastructure for autonomous agents to buy capabilities, route execution and settle real-world payments with stablecoins",
+      "product_summary": "ChainFX Capability Network lets agents discover and buy digital capabilities, execute metered services, trade stablecoins and request real-world fiat payments funded by USDT.",
       "primary_flow": [
         "discover_capability",
         "purchase_capability",
@@ -51,7 +52,8 @@
         "quote_required_usdt",
         "deposit_usdt_to_unique_payment_address",
         "match_deposit_by_address",
-        "settle_pix_or_credit_card_recipient",
+        "chainfx_pays_pix_payment_link_or_card_bill",
+        "attach_settlement_receipt",
         "poll_payment_intent_status"
       ],
       "featured_tools": [
@@ -83,10 +85,23 @@
       ],
       "agent_payments": {
         "status": "available",
+        "capability_id": "agent_payments",
+        "description": "Agents can pay real-world PIX recipients, payment links or card bills by funding an intent with BSC USDT. ChainFX performs the fiat payment after deposit confirmation and returns settled status plus receipt.",
         "types": [
           "pix",
           "credit_card"
         ],
+        "destination_fields": {
+          "pix": [
+            "pix_key"
+          ],
+          "credit_card": [
+            "payment_link",
+            "barcode",
+            "beneficiary_name",
+            "due_date"
+          ]
+        },
         "funding_asset": "USDT",
         "funding_network": "BSC",
         "rest_endpoints": {
@@ -98,7 +113,8 @@
           "getPaymentIntent",
           "listAgentPaymentIntents"
         ],
-        "settlement_policy": "ChainFX settles fiat only after the agent-funded USDT deposit is confirmed."
+        "settlement_policy": "ChainFX pays the fiat destination only after the agent-funded USDT deposit is confirmed.",
+        "agent_result": "Agents poll getPaymentIntent and receive lifecycle status, deposit transaction, settlement status and settlement_receipt_url or settlement_receipt_note when paid."
       },
       "payments": {
         "assets": [
