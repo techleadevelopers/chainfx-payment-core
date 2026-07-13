@@ -14,10 +14,6 @@ import (
 
 func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 	markLegacyRoute(w, r, "/buy")
-	if !s.limiter.Allow("buy:" + clientIP(r)) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "limite de criaÃƒÂ§ÃƒÂ£o de compras excedido"})
-		return
-	}
 	var req struct {
 		AmountBRL         float64 `json:"amountBRL"`
 		AmountUSD         float64 `json:"amountUSD"`
