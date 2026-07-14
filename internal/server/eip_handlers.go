@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"errors"
 	"math/big"
 	"net/http"
@@ -103,6 +104,52 @@ func (s *Server) handleAgentEIPVerify(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleAgentEIPTestSuiteStatus(w http.ResponseWriter, r *http.Request) {
+	if s.eipProbes == nil {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "EIP_PROBES_UNAVAILABLE", "EIP probe runner indisponivel")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.eipProbes.status(r.Context()))
+}
+
+func (s *Server) handleAgentEIPTestSuiteRun(w http.ResponseWriter, r *http.Request) {
+	var req eipProbeRunRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "INVALID_JSON", "JSON invalido")
+		return
+	}
+	if req.RealRun && !s.eipProbeRunAuthorized(w, r) {
+		return
+	}
+	if s.eipProbes == nil {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "EIP_PROBES_UNAVAILABLE", "EIP probe runner indisponivel")
+		return
+	}
+	resp, err := s.eipProbes.run(r.Context(), req, s.eipDomain(eip712.Domain{}), s.eipAssetCapabilities(r))
+	if err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "EIP_PROBE_RUN_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) eipProbeRunAuthorized(w http.ResponseWriter, r *http.Request) bool {
+	expected := ""
+	if s != nil && s.cfg != nil {
+		expected = strings.TrimSpace(s.cfg.AdminConsoleKey)
+	}
+	got := strings.TrimSpace(r.Header.Get("X-Admin-Console-Key"))
+	if expected == "" || (got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1) {
+		return true
+	}
+	auth := s.chainFXAuthContext(r)
+	if auth.Valid && !(auth.Sandbox && s.cfg != nil && s.cfg.IsProduction()) {
+		return true
+	}
+	writeAPIError(w, r, http.StatusUnauthorized, "EIP_PROBE_AUTH_REQUIRED", "real_run exige X-Admin-Console-Key valido ou API key valida")
+	return false
+}
+
 func (s *Server) eipCapabilities(r *http.Request) map[string]any {
 	domain := s.eipDomain(eip712.Domain{})
 	assets := s.eipAssetCapabilities(r)
@@ -133,9 +180,10 @@ func (s *Server) eipCapabilities(r *http.Request) map[string]any {
 				"note":   "Delegation must wait for wallet UX, chain support and phishing-resistant guards.",
 			},
 		},
-		"assets":       assets,
-		"prepareRoute": "/agent/v1/eips/prepare",
-		"verifyRoute":  "/agent/v1/eips/verify",
+		"assets":         assets,
+		"prepareRoute":   "/agent/v1/eips/prepare",
+		"verifyRoute":    "/agent/v1/eips/verify",
+		"testSuiteRoute": "/agent/v1/eips/test-suite",
 	}
 }
 
