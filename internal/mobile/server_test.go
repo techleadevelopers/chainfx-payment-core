@@ -35,3 +35,44 @@ func TestMobileWrapHandlesCORSPreflight(t *testing.T) {
 		}
 	}
 }
+
+func TestMobileCORSAllowsProductionAdminOrigin(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://chatgpt.com")
+	s := New(&config.Config{}, nil, nil)
+	handler := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("mobile preflight should not delegate to existing handler")
+	}))
+	req := httptest.NewRequest(http.MethodOptions, "/api/mobile/assets", nil)
+	req.Header.Set("Origin", "https://www.chainfx.store")
+	req.Header.Set("Access-Control-Request-Headers", "Authorization, X-Request-Id, X-Idempotency-Key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://www.chainfx.store" {
+		t.Fatalf("expected production admin origin, got %q", got)
+	}
+}
+
+func TestMobileCORSRejectsUnknownOriginWhenRestricted(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://chatgpt.com")
+	s := New(&config.Config{}, nil, nil)
+	handler := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("mobile preflight should not delegate to existing handler")
+	}))
+	req := httptest.NewRequest(http.MethodOptions, "/api/mobile/assets", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("expected no CORS origin for unknown host, got %q", got)
+	}
+}
