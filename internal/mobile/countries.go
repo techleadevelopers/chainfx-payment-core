@@ -18,8 +18,7 @@ import (
 func (s *Server) handleListCountries(w http.ResponseWriter, r *http.Request) {
 	countries, err := mobileDB(s.db).ListCountries(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
+		countries = fallbackMobileCountries()
 	}
 	if countries == nil {
 		countries = []models.Country{}
@@ -32,8 +31,7 @@ func (s *Server) handleGetCountry(w http.ResponseWriter, r *http.Request) {
 	code := strings.ToUpper(r.PathValue("code"))
 	country, err := mobileDB(s.db).GetCountry(r.Context(), code)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
+		country = fallbackMobileCountry(code)
 	}
 	if country == nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "país não encontrado"})
@@ -51,8 +49,7 @@ func (s *Server) handleListCountryRails(w http.ResponseWriter, r *http.Request) 
 	code := strings.ToUpper(r.PathValue("code"))
 	rails, err := mobileDB(s.db).ListRailsByCountry(r.Context(), code)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
+		rails = fallbackMobileRails(code)
 	}
 	if rails == nil {
 		rails = []models.PaymentRail{}
@@ -78,17 +75,36 @@ func (s *Server) handleDetectCountry(w http.ResponseWriter, r *http.Request) {
 		country, _ = mobileDB(s.db).GetCountry(r.Context(), "BR")
 	}
 	if country == nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"detected_code": code,
-			"country":       nil,
-			"rails":         []any{},
-		})
-		return
+		country = fallbackMobileCountry("BR")
 	}
 	rails, _ := mobileDB(s.db).ListRailsByCountry(r.Context(), country.Code)
+	if rails == nil {
+		rails = fallbackMobileRails(country.Code)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"detected_code": code,
 		"country":       country,
 		"rails":         rails,
 	})
+}
+
+func fallbackMobileCountries() []models.Country {
+	return []models.Country{*fallbackMobileCountry("BR")}
+}
+
+func fallbackMobileCountry(code string) *models.Country {
+	if strings.ToUpper(strings.TrimSpace(code)) != "BR" {
+		return nil
+	}
+	return &models.Country{Code: "BR", Name: "Brasil", Currency: "BRL", Language: "pt-BR", Active: true}
+}
+
+func fallbackMobileRails(code string) []models.PaymentRail {
+	if strings.ToUpper(strings.TrimSpace(code)) != "BR" {
+		return []models.PaymentRail{}
+	}
+	return []models.PaymentRail{
+		{ID: "fallback-br-pix", CountryCode: "BR", Name: "PIX", Currency: "BRL", Active: true},
+		{ID: "fallback-br-card", CountryCode: "BR", Name: "Cartao", Currency: "BRL", Active: true},
+	}
 }
