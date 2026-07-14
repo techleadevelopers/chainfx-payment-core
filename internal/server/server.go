@@ -36,6 +36,8 @@ type Server struct {
 	paymaster        *paymaster.Service
 	requestLogQueue  chan database.APIRequestLogInput
 	requestLogDrops  atomic.Int64
+	discoveryCache   map[string]cachedDiscoveryDocument
+	discoveryCacheMu sync.Mutex
 	pspRouter        *psp.Router // PSP abstraction; nil = legacy inline Efí parsing
 
 	// Chaos / adversarial engine (optional — wired from main.go).
@@ -78,6 +80,7 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 		webhookDashboard: webhooks.NewDashboard(db),
 		agents:           agents.NewClient(cfg),
 		requestLogQueue:  make(chan database.APIRequestLogInput, 4096),
+		discoveryCache:   make(map[string]cachedDiscoveryDocument),
 	}
 	if db != nil {
 		go s.runRequestLogWorker()
