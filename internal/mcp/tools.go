@@ -293,6 +293,18 @@ func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerF
 		r = r.WithContext(ctx)
 
 		if !isPublicMCPTool(req.Name) && authorize != nil {
+			if apiKey == "" && returnsAuthRequiredForAnonymousMCPTool(req.Name) {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"isError": false,
+					"content": []map[string]any{{"type": "json", "json": map[string]any{
+						"authRequired": true,
+						"status":       "unauthorized",
+						"tool":         req.Name,
+						"message":      "Tool requires a ChainFX API key. No account-scoped data was returned.",
+					}}},
+				})
+				return
+			}
 			if !authorize(w, r) {
 				s.recordMCPToolLog(r, req.Name, "error", "unauthorized", time.Since(start))
 				return
@@ -326,7 +338,26 @@ func isPublicMCPTool(name string) bool {
 		"chooseRoute",
 		"listAssets",
 		"quote",
+		"trade",
+		"dryRunCapability",
 		"list_webhook_events":
+		return true
+	default:
+		return false
+	}
+}
+
+func returnsAuthRequiredForAnonymousMCPTool(name string) bool {
+	switch name {
+	case "getPurchase",
+		"getUsage",
+		"settlementStatus",
+		"get_order_status",
+		"list_webhook_subscriptions",
+		"listAgentGrants",
+		"getAgentPolicy",
+		"listAgentPaymentIntents",
+		"getPaymentIntent":
 		return true
 	default:
 		return false
@@ -471,15 +502,15 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 	case "get_order_status":
 		return s.toolGetOrderStatus(ctx, args)
 	case "market_analysis":
-		return s.toolMarketAnalysis(ctx)
+		return s.callMCPAITool(ctx, name, args)
 	case "trade_recommendation":
-		return s.toolTradeRecommendation(ctx, args)
+		return s.callMCPAITool(ctx, name, args)
 	case "price_prediction":
-		return s.toolPricePrediction(ctx, args)
+		return s.callMCPAITool(ctx, name, args)
 	case "detect_anomalies":
-		return s.toolDetectAnomalies(ctx, args)
+		return s.callMCPAITool(ctx, name, args)
 	case "summarize_transactions":
-		return s.toolSummarizeTransactions(ctx, args)
+		return s.callMCPAITool(ctx, name, args)
 	case "list_webhook_events":
 		return webhooks.AllEvents(), nil
 	case "create_webhook_subscription":
@@ -538,7 +569,122 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 	}
 }
 
+func (s *Server) callMCPAITool(ctx context.Context, name string, args map[string]any) (any, error) {
+	if s.agents != nil && s.agents.Configured() {
+		var (
+			out any
+			err error
+		)
+		switch name {
+		case "market_analysis":
+			out, err = s.toolMarketAnalysis(ctx)
+		case "trade_recommendation":
+			out, err = s.toolTradeRecommendation(ctx, args)
+		case "price_prediction":
+			out, err = s.toolPricePrediction(ctx, args)
+		case "detect_anomalies":
+			out, err = s.toolDetectAnomalies(ctx, args)
+		case "summarize_transactions":
+			out, err = s.toolSummarizeTransactions(ctx, args)
+		default:
+			return nil, fmt.Errorf("ferramenta de IA desconhecida: %s", name)
+		}
+		if err == nil {
+			return out, nil
+		}
+	}
+
+	rates := s.toolGetRates()
+	switch name {
+	case "market_analysis":
+		return fallbackMCPMarketAnalysis(rates), nil
+	case "trade_recommendation":
+		for k, v := range args {
+			rates[k] = v
+		}
+		return fallbackMCPTradeRecommendation(rates), nil
+	case "price_prediction":
+		horizon := firstNonEmptyMCP(stringArg(args, "horizon"), "24h")
+		return fallbackMCPPricePrediction(rates, horizon), nil
+	case "detect_anomalies":
+		transactions, _ := toMapSlice(args["transactions"])
+		return fallbackMCPAnomalyDetection(transactions), nil
+	case "summarize_transactions":
+		transactions, _ := toMapSlice(args["transactions"])
+		return fallbackMCPTransactionSummary(transactions, stringArg(args, "period")), nil
+	default:
+		return nil, fmt.Errorf("ferramenta de IA desconhecida: %s", name)
+	}
+}
+
+func fallbackMCPMarketAnalysis(rates map[string]any) map[string]any {
+	return map[string]any{
+		"source":      "fallback",
+		"status":      "degraded",
+		"summary":     "Market analysis provider unavailable; returning deterministic rate context.",
+		"rates":       rates,
+		"signals":     []string{"stablecoin rails available", "use fresh quote before execution"},
+		"confidence":  "low",
+		"generatedAt": time.Now().UTC(),
+	}
+}
+
+func fallbackMCPTradeRecommendation(context map[string]any) map[string]any {
+	return map[string]any{
+		"source":         "fallback",
+		"status":         "degraded",
+		"recommendation": "hold",
+		"reason":         "AI provider unavailable; deterministic fallback avoids directional advice.",
+		"context":        context,
+		"generatedAt":    time.Now().UTC(),
+	}
+}
+
+func fallbackMCPPricePrediction(rates map[string]any, horizon string) map[string]any {
+	return map[string]any{
+		"source":      "fallback",
+		"status":      "degraded",
+		"horizon":     firstNonEmptyMCP(horizon, "24h"),
+		"prediction":  "flat",
+		"range":       map[string]any{"lowBps": -50, "highBps": 50},
+		"rates":       rates,
+		"generatedAt": time.Now().UTC(),
+	}
+}
+
+func fallbackMCPAnomalyDetection(transactions []map[string]any) map[string]any {
+	return map[string]any{
+		"source":           "fallback",
+		"status":           "degraded",
+		"transactionCount": len(transactions),
+		"anomalies":        []any{},
+		"message":          "AI provider unavailable; no anomalies flagged by deterministic fallback.",
+		"generatedAt":      time.Now().UTC(),
+	}
+}
+
+func fallbackMCPTransactionSummary(transactions []map[string]any, period string) map[string]any {
+	return map[string]any{
+		"source":           "fallback",
+		"status":           "degraded",
+		"period":           firstNonEmptyMCP(period, "unspecified"),
+		"transactionCount": len(transactions),
+		"summary":          "AI provider unavailable; returning transaction count only.",
+		"generatedAt":      time.Now().UTC(),
+	}
+}
+
 func (s *Server) toolGetRates() map[string]any {
+	if s == nil || s.prices == nil {
+		return map[string]any{
+			"USDT_BRL": 0,
+			"USDT_USD": 1,
+			"USDT_EUR": 0,
+			"BTC_USDT": 0,
+			"EUR_USD":  0,
+			"source":   "fallback",
+		}
+	}
 	price := s.prices.GetPrice("BRL")
 	return map[string]any{
 		"USDT_BRL": price,
@@ -1555,9 +1701,9 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 		}
 	}
 
-	var amountBRL float64
-	if _, err := fmt.Sscanf(amountBRLStr, "%f", &amountBRL); err != nil || amountBRL <= 0 {
-		return nil, fmt.Errorf("amount_brl deve ser um numero positivo")
+	amountBRLMoney, parseErr := money.ParseMoney(amountBRLStr)
+	if parseErr != nil || amountBRLMoney <= 0 {
+		return nil, fmt.Errorf("amount_brl deve ser um numero positivo valido (ex: '150.00')")
 	}
 
 	// ── Rate ──────────────────────────────────────────────────────────────────
@@ -1567,9 +1713,15 @@ func (s *Server) toolCreateM2MPaymentIntent(ctx context.Context, args map[string
 	}
 
 	// ── Fee calculation ───────────────────────────────────────────────────────
-	grossUSDT := amountBRL / usdtRate
-	feeUSDT := grossUSDT * (float64(feeBps) / 10_000.0)
-	requiredUSDT := grossUSDT + feeUSDT
+	usdtRateDecimal := money.RateFromFloat(usdtRate)
+	grossUSDTTokens := money.TokensFromFiat(amountBRLMoney, usdtRateDecimal)
+	feeUSDTTokens := money.TokenFeeBps(grossUSDTTokens, feeBps)
+	requiredUSDTTokens := grossUSDTTokens + feeUSDTTokens
+
+	amountBRL := amountBRLMoney.Float64()
+	grossUSDT := grossUSDTTokens.Float64()
+	feeUSDT := feeUSDTTokens.Float64()
+	requiredUSDT := requiredUSDTTokens.Float64()
 
 	_, decision, policyErr := s.db.ValidateAgentPaymentPolicy(ctx, agentWallet, "USDT", fmt.Sprintf("%.6f", requiredUSDT))
 	if policyErr != nil {
