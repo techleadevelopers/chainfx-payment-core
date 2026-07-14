@@ -367,27 +367,32 @@ func (rb *RelayBatcher) dispatchOne(ctx context.Context, job relayJob) {
 		return
 	}
 
-	// ── Fee leg: feeAmount → hot wallet (best-effort, non-retried) ─────────
+	// Fee leg is mandatory once a split was planned. If it fails after retries,
+	// the relay is marked DLQ so operations can reconcile the already-sent net leg.
 	if feeAmount != "" && rb.relayer != nil {
 		hotWallet := rb.relayer.FeeDestination()
-		go func() {
-			feeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			// Fee leg uses relay_id+"_fee" as idempotency key so the DB keeps it distinct.
-			if ferr := rb.signerTransfer(feeCtx, hotWallet, feeAmount, job.token, job.network, job.relayID+"_fee"); ferr != nil {
-				slog.Error("[Paymaster] fee leg failed — spread NOT captured",
-					"relay_id", job.relayID,
-					"fee_usdt", feeUSDT,
-					"error", ferr,
-				)
-			} else {
-				slog.Info("[Paymaster] fee leg captured",
-					"relay_id", job.relayID,
-					"fee_usdt", feeUSDT,
-					"hot_wallet", hotWallet,
-				)
+		feeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		feeErr := ExecuteWithRetry(feeCtx, cfg, "relay:fee:"+job.relayID, func(ctx context.Context) error {
+			return rb.signerTransfer(ctx, hotWallet, feeAmount, job.token, job.network, job.relayID+"_fee")
+		})
+		if feeErr != nil {
+			slog.Error("[Paymaster] fee leg failed after retries",
+				"relay_id", job.relayID,
+				"fee_usdt", feeUSDT,
+				"error", feeErr,
+			)
+			if rb.retryFn != nil {
+				rb.retryFn(ctx, job.relayID, "fee leg failed after net leg: "+feeErr.Error())
 			}
-		}()
+			return
+		}
+		slog.Info("[Paymaster] fee leg captured",
+			"relay_id", job.relayID,
+			"fee_usdt", feeUSDT,
+			"hot_wallet", hotWallet,
+		)
+		feeAmount = ""
 	}
 }
 
