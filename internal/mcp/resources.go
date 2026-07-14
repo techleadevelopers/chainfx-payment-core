@@ -46,19 +46,67 @@ type resourceReadRequest struct {
 }
 
 func (s *Server) handleResourcesRead(w http.ResponseWriter, r *http.Request) {
-	var req resourceReadRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeMCPError(w, http.StatusBadRequest, "JSON invalido")
-		return
+	s.handleResourcesReadWithAuthorize(nil)(w, r)
+}
+
+func (s *Server) handleResourcesReadWithAuthorize(authorize Authorize) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req resourceReadRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeMCPError(w, http.StatusBadRequest, "JSON invalido")
+			return
+		}
+
+		req.URI = strings.TrimSpace(req.URI)
+		if req.URI == "" {
+			writeMCPError(w, http.StatusBadRequest, "uri obrigatorio")
+			return
+		}
+
+		if !isPublicMCPResource(req.URI) && authorize != nil {
+			if mcpAPIKey(r) == "" {
+				writeResourceContent(w, req.URI, map[string]any{
+					"authRequired": true,
+					"status":       "unauthorized",
+					"message":      "Resource requires a ChainFX API key. Discovery remains public, but account-scoped data is not exposed anonymously.",
+				})
+				return
+			}
+			if !authorize(w, r) {
+				return
+			}
+		}
+
+		content, err := s.readResource(r.Context(), req.URI)
+		if err != nil {
+			writeMCPError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeResourceContent(w, req.URI, content)
 	}
-	content, err := s.readResource(r.Context(), req.URI)
-	if err != nil {
-		writeMCPError(w, http.StatusNotFound, err.Error())
-		return
-	}
+}
+
+func writeResourceContent(w http.ResponseWriter, uri string, content any) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"contents": []map[string]any{{"uri": req.URI, "mimeType": "application/json", "json": content}},
+		"contents": []map[string]any{{"uri": uri, "mimeType": "application/json", "json": content}},
 	})
+}
+
+func isPublicMCPResource(uri string) bool {
+	uri = strings.TrimSpace(uri)
+	switch {
+	case uri == "chainfx://rates/latest",
+		uri == "chainfx://marketplace/capabilities",
+		uri == "chainfx://marketplace/products",
+		uri == "chainfx://agent/assets",
+		uri == "chainfx://webhooks/events",
+		uri == "chainfx://mcp/registry":
+		return true
+	case strings.HasPrefix(uri, "chainfx://capability-contracts/"):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
@@ -119,6 +167,9 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		wallet := strings.TrimPrefix(uri, "chainfx://agent/intents/")
 		return s.toolListAgentPaymentIntents(ctx, map[string]any{"agentWallet": wallet})
 	case uri == "chainfx://mcp/registry":
+		if s.db == nil {
+			return fallbackCapabilities(), nil
+		}
 		return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
 	default:
 		return nil, fmt.Errorf("recurso desconhecido: %s", uri)
