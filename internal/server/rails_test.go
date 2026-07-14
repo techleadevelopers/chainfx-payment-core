@@ -145,6 +145,10 @@ func TestWebAvailabilityAliasesBypassAuthAndDB(t *testing.T) {
 func TestSmartRateLimitSkipsCriticalWebhooks(t *testing.T) {
 	s := &Server{cfg: &config.Config{}}
 	for _, path := range []string{
+		"/healthz",
+		"/readyz",
+		"/api/mobile/health",
+		"/internal/sweep",
 		"/api/pix/webhook",
 		"/api/pix/webhook/buy",
 		"/api/efi/charges/webhook/buy",
@@ -315,6 +319,57 @@ func TestPenaltyBoxBlocksAfterRepeatedRateLimitViolations(t *testing.T) {
 	}
 	if hits != limit {
 		t.Fatalf("expected only requests before the limit to reach handler, got %d hits", hits)
+	}
+}
+
+func TestPenaltyBoxBannedRequestsDoNotEscalateOffense(t *testing.T) {
+	box := newPenaltyBox(true, 1, time.Minute, 15*time.Minute, time.Hour, 24*time.Hour)
+	now := time.Now()
+	banned, _ := box.recordViolation("ip:203.0.113.10|route:write", now)
+	if !banned {
+		t.Fatal("expected first violation to ban with threshold 1")
+	}
+	for i := 0; i < 5; i++ {
+		if blocked, _ := box.banned("ip:203.0.113.10|route:write", now.Add(time.Duration(i+1)*time.Second)); !blocked {
+			t.Fatalf("expected request %d to stay blocked", i)
+		}
+	}
+	entry := box.entries["ip:203.0.113.10|route:write"]
+	if entry == nil || entry.offenses != 1 {
+		t.Fatalf("blocked requests should not escalate offense count, got %#v", entry)
+	}
+}
+
+func TestPenaltyBoxIsScopedByRouteClass(t *testing.T) {
+	cfg := &config.Config{RateLimitMax: 1}
+	s := &Server{
+		cfg:           cfg,
+		globalLimiter: newRateLimiter(60000, 20),
+		penaltyBox:    newPenaltyBox(true, 1, time.Minute, 15*time.Minute, time.Hour, 24*time.Hour),
+	}
+	hits := 0
+	handler := s.withSmartRateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	limit := smartRateLimitMax("anonymous", "write", cfg.RateLimitMax)
+	for i := 0; i < limit+1; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/order", nil)
+		req.RemoteAddr = "203.0.113.11:1234"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+	}
+
+	readReq := httptest.NewRequest(http.MethodGet, "/api/mobile/user/profile", nil)
+	readReq.RemoteAddr = "203.0.113.11:1234"
+	readRec := httptest.NewRecorder()
+	handler.ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusNoContent {
+		t.Fatalf("write route penalty should not block read route class, got %d body=%s", readRec.Code, readRec.Body.String())
+	}
+	if hits != limit+1 {
+		t.Fatalf("expected write passes plus read pass to hit handler, got %d", hits)
 	}
 }
 
