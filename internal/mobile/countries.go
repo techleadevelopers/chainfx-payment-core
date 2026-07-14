@@ -38,6 +38,9 @@ func (s *Server) handleGetCountry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rails, _ := mobileDB(s.db).ListRailsByCountry(r.Context(), code)
+	if len(rails) == 0 {
+		rails = fallbackMobileRails(code)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"country": country,
 		"rails":   rails,
