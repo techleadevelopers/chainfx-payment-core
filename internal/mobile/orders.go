@@ -125,7 +125,7 @@ func (s *Server) handleMobileSwap(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "from_asset, to_asset e amount obrigatórios"})
 		return
 	}
-	price := s.PriceCache().GetCurrentPrice()
+	price := mobileAssetPriceBRL(s.PriceCache(), strings.ToUpper(firstNonEmptyStr(req.FromAsset, "USDT")))
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"type":       "swap",
 		"from_asset": req.FromAsset,
