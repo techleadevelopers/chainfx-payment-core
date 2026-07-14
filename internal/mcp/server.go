@@ -109,16 +109,44 @@ func (rl *mcpRateLimiter) allow(key string, limit int) (bool, int, time.Time) {
 	return true, remaining - 1, resetAt
 }
 
-// tierLimit returns calls-per-minute for a given MCP API key.
-func tierLimit(apiKey string) int {
+// tierLimit returns calls-per-minute for a given MCP API key and tool class.
+func tierLimit(apiKey, toolClass string) int {
+	tier := "anonymous"
 	switch {
 	case strings.HasPrefix(apiKey, "sk_live_"):
-		return 2000
+		tier = "live"
 	case strings.HasPrefix(apiKey, "sk_test_"):
-		return 600
-	default:
-		return 60
+		tier = "test"
 	}
+	limits := map[string]map[string]int{
+		"anonymous": {
+			"mcp_tool_read":    300,
+			"mcp_tool_write":   30,
+			"mcp_ai_expensive": 30,
+			"mcp_financial":    30,
+			"mcp_abuse":        10,
+		},
+		"test": {
+			"mcp_tool_read":    900,
+			"mcp_tool_write":   120,
+			"mcp_ai_expensive": 60,
+			"mcp_financial":    120,
+			"mcp_abuse":        20,
+		},
+		"live": {
+			"mcp_tool_read":    1800,
+			"mcp_tool_write":   300,
+			"mcp_ai_expensive": 120,
+			"mcp_financial":    300,
+			"mcp_abuse":        30,
+		},
+	}
+	if byClass, ok := limits[tier]; ok {
+		if limit, ok := byClass[toolClass]; ok {
+			return limit
+		}
+	}
+	return limits[tier]["mcp_abuse"]
 }
 
 // New builds an MCP server bound to the platform's shared services.
@@ -194,6 +222,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeCachedJSON(w http.ResponseWriter, status int, payload []byte) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
 	w.WriteHeader(status)
 	_, _ = ioCopy(w, payload)
 }
