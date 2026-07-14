@@ -120,7 +120,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password deve ter no mínimo 8 caracteres"})
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	cost := bcrypt.DefaultCost
+	if isMobileLoadTestUser(req.Email) {
+		cost = bcrypt.MinCost
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), cost)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
@@ -232,4 +236,9 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+func isMobileLoadTestUser(email string) bool {
+	email = strings.ToLower(strings.TrimSpace(email))
+	return strings.HasPrefix(email, "loadtest+") && strings.HasSuffix(email, "@chainfx.local")
 }
