@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"net/http"
+	"strings"
 
 	"payment-gateway/internal/models"
 )
@@ -23,11 +24,24 @@ func (s *Server) handleDCACreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "frequency deve ser daily, weekly ou monthly"})
 		return
 	}
-	if req.AmountBRL < float64(s.cfg.OrderMinBrl) {
+	asset, _, err := s.mobileAssetBySymbol(r.Context(), req.TokenSymbol)
+	if err != nil && asset == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
+		return
+	}
+	if asset == nil || !asset.Active {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token_symbol invalido ou inativo"})
+		return
+	}
+	minBRL := 0.0
+	if s != nil && s.cfg != nil {
+		minBRL = float64(s.cfg.OrderMinBrl)
+	}
+	if minBRL > 0 && req.AmountBRL < minBRL {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amount_brl abaixo do mínimo"})
 		return
 	}
-	strategy, err := mobileDB(s.db).CreateDCA(r.Context(), uid, req.TokenSymbol, req.AmountBRL, freq)
+	strategy, err := mobileDB(s.db).CreateDCA(r.Context(), uid, strings.ToUpper(req.TokenSymbol), req.AmountBRL, freq)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
