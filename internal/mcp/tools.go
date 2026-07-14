@@ -58,6 +58,16 @@ func (s *Server) tools() []Tool {
 			InputSchema: schema(map[string]string{"capability": "string obrigatorio", "version": "string opcional, default v1"}),
 		},
 		{
+			Name:        "getEIPCapabilities",
+			Description: "Lista suporte EIP-712/EIP-2612/EIP-3009/4337/7702 e rails stablecoin disponiveis por asset.",
+			InputSchema: schema(nil),
+		},
+		{
+			Name:        "prepareEIPTypedIntent",
+			Description: "Gera typedData EIP-712, digest, domain separation e decisao de rail para M2MIntent, MobileTransfer, CapabilityPurchase ou PayIntent.",
+			InputSchema: schema(map[string]string{"intentType": "M2MIntent|MobileTransfer|CapabilityPurchase|PayIntent", "message": "object com payer/from, recipient/to, asset, amount base-unit, nonce, deadline, idempotencyKey"}),
+		},
+		{
 			Name:        "purchaseCapability",
 			Description: "Cria payment intent stablecoin para uma capability. O agente paga on-chain e depois submete receipt via API.",
 			InputSchema: schema(map[string]string{"capability": "string obrigatorio", "planId": "string opcional", "agentWallet": "string obrigatorio", "payerWallet": "string obrigatorio", "idempotencyKey": "string obrigatorio", "nonce": "string obrigatorio", "paymentAsset": "string opcional"}),
@@ -335,6 +345,8 @@ func isPublicMCPTool(name string) bool {
 		"listCapabilities",
 		"getCapability",
 		"getCapabilityContract",
+		"getEIPCapabilities",
+		"prepareEIPTypedIntent",
 		"chooseRoute",
 		"listAssets",
 		"quote",
@@ -371,6 +383,8 @@ func mcpToolRateClass(name string) string {
 		"listCapabilities",
 		"getCapability",
 		"getCapabilityContract",
+		"getEIPCapabilities",
+		"prepareEIPTypedIntent",
 		"chooseRoute",
 		"listAssets",
 		"quote",
@@ -481,6 +495,10 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return s.toolGetCapability(ctx, args)
 	case "getCapabilityContract":
 		return s.toolGetCapabilityContract(ctx, args)
+	case "getEIPCapabilities":
+		return s.toolGetEIPCapabilities(), nil
+	case "prepareEIPTypedIntent":
+		return s.toolPrepareEIPTypedIntent(ctx, args)
 	case "purchaseCapability":
 		return s.toolPurchaseCapability(ctx, args)
 	case "getPurchase":
