@@ -19,7 +19,7 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 	if user.WalletAddress != nil {
 		walletAddr = *user.WalletAddress
 	}
-	price := s.workers.PriceWorker.GetCurrentPrice()
+	price := mobileAssetPriceBRL(s.PriceCache(), "USDT")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"wallet_address": walletAddr,
 		"balances": []map[string]any{
@@ -32,7 +32,7 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWalletTokens(w http.ResponseWriter, r *http.Request) {
-	price := s.workers.PriceWorker.GetCurrentPrice()
+	price := mobileAssetPriceBRL(s.PriceCache(), "USDT")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tokens": []map[string]any{
 			{"symbol": "USDT", "name": "Tether USD", "network": "BSC", "contract": s.cfg.BscUsdtContract, "price_brl": price, "decimals": 18},
