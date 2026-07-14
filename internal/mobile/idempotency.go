@@ -51,6 +51,9 @@ func (s *Server) requireIdempotency(opType string, next http.HandlerFunc) http.H
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 		if key == "" {
+			key = strings.TrimSpace(r.Header.Get("X-Idempotency-Key"))
+		}
+		if key == "" {
 			key = newIdempotencyKey()
 			w.Header().Set("Idempotency-Key", key)
 			w.Header().Set("Idempotency-Key-Source", "server-generated")
