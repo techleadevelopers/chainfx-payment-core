@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"payment-gateway/internal/agents"
@@ -32,6 +33,8 @@ type Server struct {
 	webhookDashboard *webhooks.Dashboard
 	agents           *agents.Client
 	paymaster        *paymaster.Service
+	requestLogQueue  chan database.APIRequestLogInput
+	requestLogDrops  atomic.Int64
 	pspRouter        *psp.Router // PSP abstraction; nil = legacy inline Efí parsing
 
 	// Chaos / adversarial engine (optional — wired from main.go).
@@ -60,7 +63,7 @@ type buyFeeBreakdown struct {
 
 func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, mailer *email.Service) *Server {
 	webhookDispatcher := webhooks.New(db, cfg)
-	return &Server{
+	s := &Server{
 		cfg:              cfg,
 		db:               db,
 		workers:          workerMgr,
@@ -72,7 +75,12 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 		webhookLogs:      webhooks.NewLogs(db),
 		webhookDashboard: webhooks.NewDashboard(db),
 		agents:           agents.NewClient(cfg),
+		requestLogQueue:  make(chan database.APIRequestLogInput, 4096),
 	}
+	if db != nil {
+		go s.runRequestLogWorker()
+	}
+	return s
 }
 
 // WithPaymaster attaches a paymaster.Service to the Server.
