@@ -1,11 +1,6 @@
 package mobile
 
-// swap.go — Phase 5: Direct crypto-to-crypto Swap endpoints (mobile-only)
-//
-//	POST /api/mobile/swap/quote    — get a real-time swap quote
-//	POST /api/mobile/swap/execute  — submit a swap order
-//	GET  /api/mobile/swap/{id}     — get swap status
-//	GET  /api/mobile/swaps         — list user's swaps
+// Phase 5 direct crypto-to-crypto swap endpoints for mobile.
 
 import (
 	"log/slog"
@@ -15,20 +10,18 @@ import (
 	"payment-gateway/internal/models"
 )
 
-const defaultSwapFeeBPS = 50  // 0.50 %
-const defaultSlippage = 0.005 // 0.5 %
+const defaultSwapFeeBPS = 50  // 0.50%
+const defaultSlippage = 0.005 // 0.5%
 
-// handleSwapQuote — POST /api/mobile/swap/quote
-// Returns a real-time price estimate. No DB write, no commitment.
 func (s *Server) handleSwapQuote(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		FromAsset string  `json:"from_asset"`
 		ToAsset   string  `json:"to_asset"`
 		Amount    float64 `json:"amount"`
-		Slippage  float64 `json:"slippage"` // e.g. 0.005 = 0.5 %
+		Slippage  float64 `json:"slippage"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Amount <= 0 || req.FromAsset == "" || req.ToAsset == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "from_asset, to_asset e amount obrigatórios"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "from_asset, to_asset e amount obrigatorios"})
 		return
 	}
 	req.FromAsset = strings.ToUpper(req.FromAsset)
@@ -42,16 +35,11 @@ func (s *Server) handleSwapQuote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pw := s.PriceCache()
-	if false && pw == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "serviço de cotação indisponível"})
-		return
-	}
 	fromBRL := mobileAssetPriceBRL(pw, req.FromAsset)
 	toBRL := mobileAssetPriceBRL(pw, req.ToAsset)
-
 	if fromBRL <= 0 || toBRL <= 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": "cotação indisponível para um dos ativos",
+			"error": "cotacao indisponivel para um dos ativos",
 		})
 		return
 	}
@@ -77,8 +65,6 @@ func (s *Server) handleSwapQuote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSwapExecute — POST /api/mobile/swap/execute
-// Creates a swap order and enqueues it for the SwapWorker.
 func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	var req struct {
@@ -88,7 +74,7 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 		Slippage  float64 `json:"slippage"`
 	}
 	if err := decodeJSON(r, &req); err != nil || req.Amount <= 0 || req.FromAsset == "" || req.ToAsset == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "from_asset, to_asset e amount obrigatórios"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "from_asset, to_asset e amount obrigatorios"})
 		return
 	}
 	req.FromAsset = strings.ToUpper(req.FromAsset)
@@ -101,8 +87,6 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 		req.Slippage = defaultSlippage
 	}
 
-	// Validate assets exist and are active
-	db := mobileDB(s.db)
 	fromAsset, _, err := s.mobileAssetBySymbol(r.Context(), req.FromAsset)
 	if err != nil && fromAsset == nil {
 		slog.Error("erro interno", "err", err)
@@ -110,7 +94,7 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fromAsset == nil || !fromAsset.Active {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ativo de origem inválido ou inativo"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ativo de origem invalido ou inativo"})
 		return
 	}
 	toAsset, _, err := s.mobileAssetBySymbol(r.Context(), req.ToAsset)
@@ -120,20 +104,18 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if toAsset == nil || !toAsset.Active {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ativo de destino inválido ou inativo"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "ativo de destino invalido ou inativo"})
 		return
 	}
 
-	swap, err := db.CreateSwap(r.Context(), uid, req.FromAsset, req.ToAsset,
-		req.Amount, req.Slippage, defaultSwapFeeBPS)
+	swap, err := mobileDB(s.db).CreateSwap(r.Context(), uid, req.FromAsset, req.ToAsset, req.Amount, req.Slippage, defaultSwapFeeBPS)
 	if err != nil {
 		slog.Error("erro interno", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
 
-	// Publish event for SwapWorker to pick up
-	if s.workers != nil {
+	if s.workers != nil && s.workers.Bus != nil {
 		s.workers.Bus.Publish(workerEvent("swap.created", map[string]any{
 			"swap_id":    swap.ID,
 			"user_id":    uid,
@@ -149,7 +131,6 @@ func (s *Server) handleSwapExecute(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleGetSwap — GET /api/mobile/swap/{id}
 func (s *Server) handleGetSwap(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	id := r.PathValue("id")
@@ -160,13 +141,12 @@ func (s *Server) handleGetSwap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if swap == nil || swap.UserID != uid {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "swap não encontrado"})
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "swap nao encontrado"})
 		return
 	}
 	writeJSON(w, http.StatusOK, swap)
 }
 
-// handleListSwaps — GET /api/mobile/swaps
 func (s *Server) handleListSwaps(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	swaps, err := mobileDB(s.db).ListSwapsByUser(r.Context(), uid, 20)
