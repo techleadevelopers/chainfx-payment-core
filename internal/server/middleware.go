@@ -63,6 +63,7 @@ func (s *Server) withSmartRateLimit(next http.Handler) http.Handler {
 			return
 		}
 		routeClass := smartRateLimitRouteClass(r)
+		w.Header().Set("X-Route-Class", routeClass)
 		penaltyKey := penaltyKeyForRequest(r, routeClass)
 		if banned, bannedUntil := s.penaltyBox.banned(penaltyKey, time.Now()); banned {
 			retryAfter := int(time.Until(bannedUntil).Seconds())
@@ -151,6 +152,9 @@ func shortSecretHash(value string) string {
 func smartRateLimitRouteClass(r *http.Request) string {
 	path := r.URL.Path
 	method := r.Method
+	if method == http.MethodGet && (path == "/mcp/capabilities.json" || path == "/agent/v1/capabilities" || path == "/agent/v1/assets" || strings.HasPrefix(path, "/.well-known/")) {
+		return "public_discovery"
+	}
 	if path == "/api/rates" || path == "/rates" || path == "/api/price" || path == "/price" || path == "/api/quote" || path == "/quote" {
 		return "read"
 	}
@@ -159,6 +163,12 @@ func smartRateLimitRouteClass(r *http.Request) string {
 	}
 	if method == http.MethodPost && (path == "/mcp/initialize" || path == "/mcp/tools/list" || path == "/mcp/resources/list" || path == "/mcp/prompts/list") {
 		return "discovery"
+	}
+	if method == http.MethodPost && path == "/mcp/resources/read" {
+		return "mcp_resource_read"
+	}
+	if method == http.MethodPost && path == "/mcp/tools/call" {
+		return "mcp_tool"
 	}
 	if strings.HasPrefix(path, "/mcp/") {
 		return "mcp"
@@ -177,11 +187,26 @@ func smartRateLimitMax(tier, routeClass string, configuredMax int) int {
 		configuredMax = 100
 	}
 	limits := map[string]map[string]int{
-		"anonymous":   {"discovery": 600, "read": 600, "write": 20, "mcp": 60, "execution": 10},
-		"invalid_key": {"discovery": 60, "read": 30, "write": 10, "mcp": 5, "execution": 5},
-		"test":        {"discovery": 1200, "read": 800, "write": 240, "mcp": 600, "execution": 180},
-		"live":        {"discovery": 3000, "read": 1200, "write": 400, "mcp": 2000, "execution": 300},
-		"api":         {"discovery": 1200, "read": 800, "write": 200, "mcp": 600, "execution": 120},
+		"anonymous": {
+			"public_discovery": 600, "discovery": 600, "read": 600, "write": 20,
+			"mcp_resource_read": 300, "mcp_tool": 600, "mcp": 60, "execution": 10,
+		},
+		"invalid_key": {
+			"public_discovery": 120, "discovery": 60, "read": 30, "write": 10,
+			"mcp_resource_read": 30, "mcp_tool": 30, "mcp": 5, "execution": 5,
+		},
+		"test": {
+			"public_discovery": 1800, "discovery": 1200, "read": 800, "write": 240,
+			"mcp_resource_read": 900, "mcp_tool": 1200, "mcp": 600, "execution": 180,
+		},
+		"live": {
+			"public_discovery": 3600, "discovery": 3000, "read": 1200, "write": 400,
+			"mcp_resource_read": 1800, "mcp_tool": 2400, "mcp": 2000, "execution": 300,
+		},
+		"api": {
+			"public_discovery": 1800, "discovery": 1200, "read": 800, "write": 200,
+			"mcp_resource_read": 900, "mcp_tool": 1200, "mcp": 600, "execution": 120,
+		},
 	}
 	if byClass, ok := limits[tier]; ok {
 		if limit, ok := byClass[routeClass]; ok {
