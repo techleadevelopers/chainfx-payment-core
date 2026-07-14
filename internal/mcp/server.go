@@ -14,6 +14,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -45,6 +46,11 @@ type Server struct {
 	agents   *agents.Client
 	dispatch *webhooks.Dispatcher
 	rl       *mcpRateLimiter // per-API-key sliding-window limiter for /mcp/tools/call
+
+	initializeJSON []byte
+	toolsListJSON  []byte
+	resourcesJSON  []byte
+	promptsJSON    []byte
 }
 
 // ─── Per-API-key rate limiter (sliding window, stdlib only) ──────────────────
@@ -52,9 +58,9 @@ type Server struct {
 // mcpRateLimiter enforces a per-API-key call budget on POST /mcp/tools/call.
 // Limits (calls per minute):
 //
-//	"live" keys  (sk_live_cfx_*) : 120/min
-//	"test" keys  (sk_test_cfx_*) :  40/min
-//	anonymous / no key           :   5/min
+//	"live" keys  (sk_live_*) : 2000/min
+//	"test" keys  (sk_test_*) :  600/min
+//	anonymous / no key       :   60/min
 type mcpRateLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*mcpBucket
@@ -107,17 +113,17 @@ func (rl *mcpRateLimiter) allow(key string, limit int) (bool, int, time.Time) {
 func tierLimit(apiKey string) int {
 	switch {
 	case strings.HasPrefix(apiKey, "sk_live_"):
-		return 120
+		return 2000
 	case strings.HasPrefix(apiKey, "sk_test_"):
-		return 40
+		return 600
 	default:
-		return 5
+		return 60
 	}
 }
 
 // New builds an MCP server bound to the platform's shared services.
 func New(db *database.DB, cfg *config.Config, prices *workers.PriceWorker, agentsClient *agents.Client, dispatcher *webhooks.Dispatcher) *Server {
-	return &Server{
+	s := &Server{
 		db:       db,
 		cfg:      cfg,
 		prices:   prices,
@@ -125,6 +131,11 @@ func New(db *database.DB, cfg *config.Config, prices *workers.PriceWorker, agent
 		dispatch: dispatcher,
 		rl:       newMCPRateLimiter(),
 	}
+	s.initializeJSON = mustJSONBytes(initializePayload())
+	s.toolsListJSON = mustJSONBytes(map[string]any{"tools": s.tools()})
+	s.resourcesJSON = mustJSONBytes(map[string]any{"resources": s.resources()})
+	s.promptsJSON = mustJSONBytes(map[string]any{"prompts": agents.ListPromptTemplates()})
+	return s
 }
 
 // Authorize is called before every MCP request. It must write an error
@@ -155,7 +166,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux, authorize Authorize) {
 }
 
 func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeCachedJSON(w, http.StatusOK, s.initializeJSON)
+}
+
+func initializePayload() map[string]any {
+	return map[string]any{
 		"protocolVersion": protocolVersion,
 		"serverInfo": map[string]any{
 			"name":        "chainfx-mcp",
@@ -168,13 +183,31 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request) {
 			"resources": map[string]any{},
 			"prompts":   map[string]any{},
 		},
-	})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeCachedJSON(w http.ResponseWriter, status int, payload []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = ioCopy(w, payload)
+}
+
+func mustJSONBytes(payload any) []byte {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return append(raw, '\n')
+}
+
+func ioCopy(w http.ResponseWriter, payload []byte) (int64, error) {
+	return bytes.NewReader(payload).WriteTo(w)
 }
 
 func writeMCPError(w http.ResponseWriter, status int, message string) {
