@@ -10,12 +10,6 @@ CREATE INDEX IF NOT EXISTS idx_dca_strategies_user_created_at
 CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_user_created_at
 	ON webhook_subscriptions(user_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_orders_user_created_at
-	ON orders(user_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_buy_orders_user_created_at
-	ON buy_orders(user_id, created_at DESC);
-
 CREATE INDEX IF NOT EXISTS idx_assets_active_symbol
 	ON assets(active, symbol);
 
