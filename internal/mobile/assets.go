@@ -18,6 +18,7 @@ import (
 
 // handleListAssets — GET /api/mobile/assets
 func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", mobileStaticCacheControl)
 	if cached, ok := s.getMobileCache("assets:list"); ok {
 		writeJSON(w, http.StatusOK, cached)
 		return
@@ -83,18 +84,32 @@ func stringPtrOrNil(value string) *string {
 	return &value
 }
 
+type mobileAssetLookup struct {
+	asset    *models.Asset
+	fallback bool
+}
+
 func (s *Server) mobileAssetBySymbol(ctx context.Context, symbol string) (*models.Asset, bool, error) {
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))
 	if symbol == "" {
 		return nil, false, nil
 	}
+	cacheKey := "assets:model:" + symbol
+	if cached, ok := s.getMobileCache(cacheKey); ok {
+		if lookup, ok := cached.(mobileAssetLookup); ok {
+			return lookup.asset, lookup.fallback, nil
+		}
+	}
 	asset, err := mobileDB(s.db).GetAsset(ctx, symbol)
 	if err == nil && asset != nil {
+		s.setMobileCache(cacheKey, mobileAssetLookup{asset: asset}, mobileHotCacheTTL)
 		return asset, false, nil
 	}
 	for _, fallback := range s.fallbackMobileAssets() {
 		if fallback.Symbol == symbol {
-			return &fallback, true, nil
+			asset := fallback
+			s.setMobileCache(cacheKey, mobileAssetLookup{asset: &asset, fallback: true}, mobileHotCacheTTL)
+			return &asset, true, nil
 		}
 	}
 	return asset, false, err
@@ -102,6 +117,7 @@ func (s *Server) mobileAssetBySymbol(ctx context.Context, symbol string) (*model
 
 // handleGetAsset — GET /api/mobile/assets/{symbol}
 func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", mobileStaticCacheControl)
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 	cacheKey := "assets:get:" + symbol
 	if cached, ok := s.getMobileCache(cacheKey); ok {
@@ -126,6 +142,7 @@ func (s *Server) handleGetAsset(w http.ResponseWriter, r *http.Request) {
 // handleGetAssetRate — GET /api/mobile/assets/{symbol}/rate
 // Returns live BRL/USD price for the requested asset.
 func (s *Server) handleGetAssetRate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", mobileRateCacheControl)
 	symbol := strings.ToUpper(r.PathValue("symbol"))
 	cacheKey := "assets:rate:" + symbol
 	if cached, ok := s.getMobileCache(cacheKey); ok {
