@@ -86,11 +86,41 @@ func (s *Server) Wrap(existing http.Handler) http.Handler {
 	s.registerRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/mobile/") {
+			s.applyCORS(w, r)
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			mux.ServeHTTP(w, r)
 			return
 		}
 		existing.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) applyCORS(w http.ResponseWriter, r *http.Request) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	allowed := "*"
+	if s != nil && s.mcfg != nil {
+		allowed = strings.TrimSpace(s.mcfg.MobileAllowedOrigins)
+	}
+	if allowed == "" {
+		allowed = "*"
+	}
+	w.Header().Add("Vary", "Origin")
+	if allowed == "*" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+	} else {
+		for _, item := range strings.Split(allowed, ",") {
+			if strings.TrimSpace(item) == origin && origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				break
+			}
+		}
+	}
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-Id, X-Correlation-Id, X-Trace-Id, X-Idempotency-Key")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id")
 }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
