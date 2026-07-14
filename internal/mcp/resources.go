@@ -117,7 +117,10 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilities(), nil
 		}
-		capabilities, err := s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
+		value, err := s.cachedValue("resource:marketplace:capabilities", 30*time.Second, func() (any, error) {
+			return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
+		})
+		capabilities, _ := value.([]*database.MarketplaceCapability)
 		if err != nil || len(capabilities) == 0 {
 			return fallbackCapabilities(), nil
 		}
@@ -128,10 +131,13 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilityContract(id), nil
 		}
-		contract, err := s.db.GetMarketplaceCapabilityContract(ctx, id, "v1")
+		value, err := s.cachedValue("resource:capability-contract:"+strings.ToLower(id)+":v1", 30*time.Second, func() (any, error) {
+			return s.db.GetMarketplaceCapabilityContract(ctx, id, "v1")
+		})
 		if err != nil {
 			return fallbackCapabilityContract(id), nil
 		}
+		contract, _ := value.(*database.MarketplaceCapabilityContract)
 		if contract == nil {
 			return fallbackCapabilityContract(id), nil
 		}
@@ -140,7 +146,9 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return map[string]any{"products": []any{}, "source": "fallback"}, nil
 		}
-		return s.db.ListMarketplaceProducts(ctx, database.MarketplaceProductFilters{})
+		return s.cachedValue("resource:marketplace:products", 30*time.Second, func() (any, error) {
+			return s.db.ListMarketplaceProducts(ctx, database.MarketplaceProductFilters{})
+		})
 	case uri == "chainfx://agent/assets":
 		if s.db == nil {
 			return fallbackAgentAssets(), nil
@@ -170,7 +178,9 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilities(), nil
 		}
-		return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
+		return s.cachedValue("resource:mcp:registry", 30*time.Second, func() (any, error) {
+			return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
+		})
 	default:
 		return nil, fmt.Errorf("recurso desconhecido: %s", uri)
 	}
