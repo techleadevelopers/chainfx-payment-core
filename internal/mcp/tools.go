@@ -244,6 +244,13 @@ func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerF
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
+		var req toolCallRequest
+		if err := decodeJSON(r, &req); err != nil {
+			s.recordMCPToolLog(r, "", "error", "invalid_json", time.Since(start))
+			writeMCPError(w, http.StatusBadRequest, "JSON invÃ¡lido")
+			return
+		}
+
 		// ── Per-API-key rate limiting ─────────────────────────────────────────────
 		apiKey := mcpAPIKey(r)
 		keyHash := shortMCPSecretHash(apiKey)
@@ -260,8 +267,10 @@ func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerF
 				keyHash = "anon:" + addr
 			}
 		}
-		limit := tierLimit(apiKey)
-		allowed, remaining, resetAt := s.rl.allow(keyHash, limit)
+		toolClass := mcpToolRateClass(req.Name)
+		limit := tierLimit(apiKey, toolClass)
+		allowed, remaining, resetAt := s.rl.allow(keyHash+":"+toolClass, limit)
+		w.Header().Set("X-MCP-Tool-Class", toolClass)
 		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
@@ -273,7 +282,8 @@ func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerF
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			metrics.IncMCPRateLimited()
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{
-				"error":      fmt.Sprintf("rate limit exceeded: %d calls/minute allowed for this key tier", limit),
+				"error":      fmt.Sprintf("rate limit exceeded: %d calls/minute allowed for %s", limit, toolClass),
+				"toolClass":  toolClass,
 				"retryAfter": retryAfter,
 				"resetAt":    resetAt.UTC().Format(time.RFC3339),
 			})
