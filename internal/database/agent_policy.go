@@ -151,8 +151,11 @@ func (db *DB) GetAgentPolicyByAccessToken(ctx context.Context, token string) (*A
 
 func (db *DB) ValidateAgentPurchasePolicy(ctx context.Context, wallet, capability, asset, grossAmount string) (*AgentPolicy, AgentPolicyDecision, error) {
 	policy, err := db.GetAgentPolicyByWallet(ctx, wallet)
-	if err != nil || policy == nil {
-		return policy, AgentPolicyDecision{Allowed: err == nil}, err
+	if err != nil {
+		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_LOOKUP_FAILED", Message: "Agent policy lookup failed."}, err
+	}
+	if policy == nil {
+		return nil, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_REQUIRED", Message: "Agent policy is required for this operation."}, nil
 	}
 	if policy.Status != "active" {
 		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_INACTIVE", Message: "Agent policy is not active."}, nil
@@ -177,8 +180,11 @@ func (db *DB) ValidateAgentPurchasePolicy(ctx context.Context, wallet, capabilit
 
 func (db *DB) ValidateAgentPaymentPolicy(ctx context.Context, wallet, asset, grossAmount string) (*AgentPolicy, AgentPolicyDecision, error) {
 	policy, err := db.GetAgentPolicyByWallet(ctx, wallet)
-	if err != nil || policy == nil {
-		return policy, AgentPolicyDecision{Allowed: err == nil}, err
+	if err != nil {
+		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_LOOKUP_FAILED", Message: "Agent policy lookup failed."}, err
+	}
+	if policy == nil {
+		return nil, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_REQUIRED", Message: "Agent policy is required for this operation."}, nil
 	}
 	if policy.Status != "active" {
 		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_INACTIVE", Message: "Agent policy is not active."}, nil
@@ -200,8 +206,11 @@ func (db *DB) ValidateAgentPaymentPolicy(ctx context.Context, wallet, asset, gro
 
 func (db *DB) ValidateAgentExecutionPolicy(ctx context.Context, token, capability, provider string, requireReal bool) (*AgentPolicy, AgentPolicyDecision, error) {
 	policy, err := db.GetAgentPolicyByAccessToken(ctx, token)
-	if err != nil || policy == nil {
-		return policy, AgentPolicyDecision{Allowed: err == nil}, err
+	if err != nil {
+		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_LOOKUP_FAILED", Message: "Agent policy lookup failed."}, err
+	}
+	if policy == nil {
+		return nil, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_REQUIRED", Message: "Agent policy is required for this operation."}, nil
 	}
 	if policy.Status != "active" {
 		return policy, AgentPolicyDecision{Allowed: false, Code: "AGENT_POLICY_INACTIVE", Message: "Agent policy is not active."}, nil
