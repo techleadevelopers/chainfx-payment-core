@@ -18,7 +18,7 @@ import (
 func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invÃ¡lida"})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
 	var req struct {
@@ -26,7 +26,7 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 		Amount float64 `json:"amount"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil || req.TxHash == "" || req.Amount <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload invÃ¡lido"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload inválido"})
 		return
 	}
 	id := r.PathValue("id")
@@ -60,7 +60,7 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePayout(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	if !validHMAC(s.cfg.SignerHmacSecret, raw, r.Header.Get("x-internal-hmac")) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invÃ¡lida"})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
 	var req struct {
@@ -69,7 +69,7 @@ func (s *Server) handlePayout(w http.ResponseWriter, r *http.Request) {
 		Error      string `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil || req.ProviderID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload invÃ¡lido"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload inválido"})
 		return
 	}
 	status := "erro"
@@ -93,7 +93,7 @@ func (s *Server) handlePixWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validHMAC(secret, raw, r.Header.Get("x-efi-signature")) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura invÃ¡lida"})
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "assinatura inválida"})
 		return
 	}
 	var req struct {
@@ -124,7 +124,7 @@ func (s *Server) handlePixWebhook(w http.ResponseWriter, r *http.Request) {
 		} `json:"pix"`
 	}
 	if err := json.Unmarshal(raw, &req); err != nil || req.OrderID == "" || req.ProviderID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload invÃ¡lido"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload inválido"})
 		return
 	}
 	if len(req.Pix) > 0 {
