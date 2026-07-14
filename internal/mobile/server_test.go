@@ -1,0 +1,37 @@
+package mobile
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"payment-gateway/internal/config"
+)
+
+func TestMobileWrapHandlesCORSPreflight(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "https://chatgpt.com")
+	s := New(&config.Config{}, nil, nil)
+	handler := s.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("mobile preflight should not delegate to existing handler")
+	}))
+	req := httptest.NewRequest(http.MethodOptions, "/api/mobile/assets", nil)
+	req.Header.Set("Origin", "https://chatgpt.com")
+	req.Header.Set("Access-Control-Request-Headers", "Authorization, X-Request-Id, X-Idempotency-Key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://chatgpt.com" {
+		t.Fatalf("expected reflected origin, got %q", got)
+	}
+	allowHeaders := rec.Header().Get("Access-Control-Allow-Headers")
+	for _, header := range []string{"Authorization", "X-Request-Id", "X-Idempotency-Key"} {
+		if !strings.Contains(allowHeaders, header) {
+			t.Fatalf("expected %s in allow headers, got %q", header, allowHeaders)
+		}
+	}
+}
