@@ -15,28 +15,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	checks := map[string]any{}
 
 	// Database
-	dbOK := s.db.SQL.PingContext(ctx) == nil
+	dbOK := s != nil && s.db != nil && s.db.SQL != nil && s.db.SQL.PingContext(ctx) == nil
 	checks["database"] = healthStatus(dbOK, "")
 
 	// Price worker (cache staleness)
-	price := s.workers.PriceWorker.GetCurrentPrice()
+	price := mobileAssetPriceBRL(s.PriceCache(), "USDT")
 	checks["price_worker"] = healthStatus(price > 0, map[string]any{
 		"usdt_brl": price,
 	})
 
 	// RPC pool (BSC)
 	checks["bsc_rpc"] = map[string]any{
-		"configured": s.cfg.BscRpcUrls != "",
-		"contract":   s.cfg.BscUsdtContract != "",
+		"configured": s != nil && s.cfg != nil && s.cfg.BscRpcUrls != "",
+		"contract":   s != nil && s.cfg != nil && s.cfg.BscUsdtContract != "",
 	}
 
 	// Worker event bus
-	checks["event_bus"] = map[string]any{
-		"ok": !s.workers.Bus.Metrics().Closed,
-	}
+	eventBusOK := s != nil && s.workers != nil && s.workers.Bus != nil && !s.workers.Bus.Metrics().Closed
+	checks["event_bus"] = map[string]any{"ok": eventBusOK}
 
 	// JWT config
-	checks["jwt"] = healthStatus(len(s.mcfg.JWTSecret) >= 32, "")
+	checks["jwt"] = healthStatus(s != nil && s.mcfg != nil && len(s.mcfg.JWTSecret) >= 32, "")
 
 	allOK := dbOK && price > 0
 	statusCode := http.StatusOK
