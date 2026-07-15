@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -27,7 +30,9 @@ type signerProbeSample struct {
 	OK        bool           `json:"ok"`
 	Expected  []int          `json:"expected"`
 	LatencyMS int64          `json:"latencyMs"`
+	ErrorCode string         `json:"errorCode,omitempty"`
 	Error     string         `json:"error,omitempty"`
+	Hint      string         `json:"hint,omitempty"`
 	Response  map[string]any `json:"response,omitempty"`
 	At        string         `json:"at"`
 }
@@ -57,6 +62,18 @@ type signerProbeSpec struct {
 	expected []int
 }
 
+type signerProbeDiagnosis struct {
+	Status           string `json:"status"`
+	Code             string `json:"code,omitempty"`
+	Message          string `json:"message,omitempty"`
+	Hint             string `json:"hint,omitempty"`
+	Action           string `json:"action,omitempty"`
+	Target           string `json:"target"`
+	TargetKind       string `json:"targetKind"`
+	Host             string `json:"host,omitempty"`
+	PreflightBlocked bool   `json:"preflightBlocked"`
+}
+
 func (s *Server) handleAdminSignerProbe(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.authorizeAdmin(w, r); !ok {
 		return
@@ -80,11 +97,19 @@ func (s *Server) handleAdminSignerProbe(w http.ResponseWriter, r *http.Request) 
 
 	signerURL := strings.TrimRight(strings.TrimSpace(s.cfg.SignerUrl), "/")
 	if signerURL == "" {
+		diagnosis := signerProbeDiagnosis{
+			Status:  "misconfigured",
+			Code:    "signer_url_missing",
+			Message: "SIGNER_URL nao configurado no gateway",
+			Hint:    "Configure SIGNER_URL no servico gateway/API.",
+			Action:  "Use a URL privada do signer quando ambos os servicos estiverem no mesmo projeto/ambiente Railway.",
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":          false,
 			"configured":  false,
 			"generatedAt": time.Now().UTC().Format(time.RFC3339Nano),
-			"error":       "SIGNER_URL not configured",
+			"error":       diagnosis.Message,
+			"diagnosis":   diagnosis,
 		})
 		return
 	}
@@ -107,6 +132,22 @@ func (s *Server) handleAdminSignerProbe(w http.ResponseWriter, r *http.Request) 
 	}
 
 	client := &http.Client{Timeout: time.Duration(req.TimeoutMS) * time.Millisecond}
+	diagnosis := preflightSignerTarget(r.Context(), signerURL, client.Timeout)
+	if diagnosis.PreflightBlocked {
+		samples := signerBlockedSamples(specs, diagnosis)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          false,
+			"configured":  true,
+			"generatedAt": time.Now().UTC().Format(time.RFC3339Nano),
+			"target":      maskSignerTarget(signerURL),
+			"diagnosis":   diagnosis,
+			"samples":     samples,
+			"summary":     summarizeSignerProbeSamples(samples),
+			"overall":     summarizeSignerProbeEndpoint("overall", "all", samples),
+		})
+		return
+	}
+
 	samples := make([]signerProbeSample, 0, req.Samples*len(specs))
 	for i := 0; i < req.Samples; i++ {
 		for _, spec := range specs {
@@ -127,6 +168,7 @@ func (s *Server) handleAdminSignerProbe(w http.ResponseWriter, r *http.Request) 
 		"configured":  true,
 		"generatedAt": time.Now().UTC().Format(time.RFC3339Nano),
 		"target":      maskSignerTarget(signerURL),
+		"diagnosis":   diagnoseSignerSamples(signerURL, samples),
 		"samples":     samples,
 		"summary":     summary,
 		"overall":     summarizeSignerProbeEndpoint("overall", "all", samples),
@@ -146,7 +188,9 @@ func (s *Server) runSignerProbe(parent context.Context, client *http.Client, bas
 	}
 	req, err := http.NewRequestWithContext(ctx, spec.method, baseURL+spec.path, bytes.NewReader(spec.body))
 	if err != nil {
+		sample.ErrorCode = "request_build_failed"
 		sample.Error = err.Error()
+		sample.Hint = "Verifique o formato de SIGNER_URL."
 		sample.LatencyMS = time.Since(started).Milliseconds()
 		return sample
 	}
@@ -161,7 +205,10 @@ func (s *Server) runSignerProbe(parent context.Context, client *http.Client, bas
 	resp, err := client.Do(req)
 	sample.LatencyMS = time.Since(started).Milliseconds()
 	if err != nil {
-		sample.Error = err.Error()
+		code, message, hint := classifySignerProbeError(baseURL, err)
+		sample.ErrorCode = code
+		sample.Error = message
+		sample.Hint = hint
 		return sample
 	}
 	defer resp.Body.Close()
@@ -177,9 +224,126 @@ func (s *Server) runSignerProbe(parent context.Context, client *http.Client, bas
 		}
 	}
 	if !sample.OK {
+		sample.ErrorCode = "unexpected_status"
 		sample.Error = fmt.Sprintf("unexpected status %d", resp.StatusCode)
+		sample.Hint = "A rota respondeu, mas com status diferente do esperado para este probe."
 	}
 	return sample
+}
+
+func preflightSignerTarget(ctx context.Context, rawURL string, timeout time.Duration) signerProbeDiagnosis {
+	diagnosis := signerProbeDiagnosis{
+		Status:     "ready",
+		Target:     maskSignerTarget(rawURL),
+		TargetKind: signerTargetKind(rawURL),
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() == "" {
+		diagnosis.Status = "misconfigured"
+		diagnosis.Code = "invalid_signer_url"
+		diagnosis.Message = "SIGNER_URL invalido"
+		diagnosis.Hint = "Use uma URL completa, por exemplo http://signer.railway.internal:4010."
+		diagnosis.Action = "Corrija SIGNER_URL no servico gateway/API e redeploy."
+		diagnosis.PreflightBlocked = true
+		return diagnosis
+	}
+	host := parsed.Hostname()
+	diagnosis.Host = host
+	if timeout <= 0 || timeout > 2*time.Second {
+		timeout = 2 * time.Second
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if _, err := net.DefaultResolver.LookupHost(lookupCtx, host); err != nil {
+		code, message, hint := classifySignerProbeError(rawURL, err)
+		diagnosis.Status = "unreachable"
+		diagnosis.Code = code
+		diagnosis.Message = message
+		diagnosis.Hint = hint
+		diagnosis.Action = signerProbeAction(code, host)
+		diagnosis.PreflightBlocked = true
+		return diagnosis
+	}
+	return diagnosis
+}
+
+func signerBlockedSamples(specs []signerProbeSpec, diagnosis signerProbeDiagnosis) []signerProbeSample {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	samples := make([]signerProbeSample, 0, len(specs))
+	for _, spec := range specs {
+		samples = append(samples, signerProbeSample{
+			Area:      spec.area,
+			Endpoint:  spec.path,
+			Method:    spec.method,
+			Status:    0,
+			OK:        false,
+			Expected:  spec.expected,
+			ErrorCode: diagnosis.Code,
+			Error:     diagnosis.Message,
+			Hint:      diagnosis.Hint,
+			At:        now,
+		})
+	}
+	return samples
+}
+
+func diagnoseSignerSamples(rawURL string, samples []signerProbeSample) signerProbeDiagnosis {
+	diagnosis := signerProbeDiagnosis{
+		Status:     "ready",
+		Target:     maskSignerTarget(rawURL),
+		TargetKind: signerTargetKind(rawURL),
+	}
+	if parsed, err := url.Parse(rawURL); err == nil {
+		diagnosis.Host = parsed.Hostname()
+	}
+	for _, sample := range samples {
+		if sample.OK {
+			continue
+		}
+		diagnosis.Status = "degraded"
+		diagnosis.Code = sample.ErrorCode
+		diagnosis.Message = sample.Error
+		diagnosis.Hint = sample.Hint
+		diagnosis.Action = signerProbeAction(sample.ErrorCode, diagnosis.Host)
+		return diagnosis
+	}
+	return diagnosis
+}
+
+func classifySignerProbeError(rawURL string, err error) (string, string, string) {
+	if err == nil {
+		return "", "", ""
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) || strings.Contains(strings.ToLower(err.Error()), "no such host") {
+		host := signerHost(rawURL)
+		return "dns_not_found",
+			fmt.Sprintf("DNS do signer nao resolveu: %s", defaultString(host, "host desconhecido")),
+			"O gateway esta tentando um hostname privado que nao existe neste projeto/ambiente Railway."
+	}
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		return "timeout", "Timeout ao conectar no signer", "O signer pode estar lento, nao iniciado, ou bloqueado por rede/porta."
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connect: refused") {
+		return "connection_refused", "Conexao recusada pelo signer", "O DNS resolveu, mas nada esta escutando na porta configurada."
+	}
+	return "request_failed", err.Error(), "Verifique SIGNER_URL, rede privada Railway e logs do signer."
+}
+
+func signerProbeAction(code, host string) string {
+	switch code {
+	case "dns_not_found":
+		return fmt.Sprintf("No gateway/API, ajuste SIGNER_URL para http://<nome-exato-do-servico-signer>.railway.internal:4010. Host atual: %s.", defaultString(host, "indefinido"))
+	case "connection_refused":
+		return "Confirme PORT=4010 no signer e que o processo esta escutando em 0.0.0.0 ou no bind esperado pelo Railway."
+	case "timeout":
+		return "Verifique se gateway e signer estao no mesmo projeto e ambiente Railway, e confira logs/startup do signer."
+	case "invalid_signer_url":
+		return "Corrija SIGNER_URL no gateway/API e faca redeploy."
+	default:
+		return "Confira SIGNER_URL, SIGNER_HMAC_SECRET e logs do servico signer."
+	}
 }
 
 func summarizeSignerProbeSamples(samples []signerProbeSample) []signerProbeEndpointSummary {
@@ -279,4 +443,26 @@ func maskSignerTarget(raw string) string {
 		return "private signer"
 	}
 	return raw
+}
+
+func signerHost(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+func signerTargetKind(raw string) string {
+	host := strings.ToLower(signerHost(raw))
+	switch {
+	case host == "":
+		return "unknown"
+	case strings.Contains(host, "railway.internal") || strings.HasSuffix(host, ".internal"):
+		return "private"
+	case strings.Contains(host, "up.railway.app"):
+		return "public_railway"
+	default:
+		return "public"
+	}
 }
