@@ -82,8 +82,18 @@ func redisObservability(s *Server) map[string]any {
 	if s == nil || s.cfg == nil {
 		return map[string]any{"status": "unavailable"}
 	}
+	requestedBackend := strings.ToLower(strings.TrimSpace(s.cfg.RateLimitBackend))
+	if requestedBackend == "" {
+		requestedBackend = "memory"
+	}
 	if strings.TrimSpace(s.cfg.RedisURL) == "" {
-		return map[string]any{"status": "not_configured", "rateLimitBackend": s.cfg.RateLimitBackend}
+		return map[string]any{
+			"status":           "not_configured",
+			"urlConfigured":    false,
+			"requestedBackend": requestedBackend,
+			"rateLimitBackend": s.cfg.RateLimitBackend,
+			"effectiveBackend": "memory",
+		}
 	}
 	global := map[string]any{"status": "unavailable"}
 	if s.globalLimiter != nil {
@@ -93,10 +103,32 @@ func redisObservability(s *Server) map[string]any {
 	if s.limiter != nil {
 		orders = s.limiter.Stats()
 	}
+	effectiveBackend := limiterBackend(global)
+	if orderBackend := limiterBackend(orders); orderBackend != "" && effectiveBackend != "" && orderBackend != effectiveBackend {
+		effectiveBackend = "mixed"
+	} else if effectiveBackend == "" {
+		effectiveBackend = orderBackend
+	}
+	if effectiveBackend == "" {
+		effectiveBackend = requestedBackend
+	}
 	return map[string]any{
 		"status":           "configured",
+		"urlConfigured":    true,
+		"requestedBackend": requestedBackend,
+		"effectiveBackend": effectiveBackend,
 		"rateLimitBackend": s.cfg.RateLimitBackend,
 		"globalLimiter":    global,
 		"orderLimiter":     orders,
 	}
+}
+
+func limiterBackend(stats map[string]any) string {
+	if stats == nil {
+		return ""
+	}
+	if backend, ok := stats["backend"].(string); ok {
+		return strings.ToLower(strings.TrimSpace(backend))
+	}
+	return ""
 }
