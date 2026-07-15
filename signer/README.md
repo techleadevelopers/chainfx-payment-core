@@ -117,7 +117,7 @@ SIGNER_URL=http://NOME_DO_SERVICE.railway.internal:4010
 
 Nota: o signer atual assina BSC/BEP20 e BSC/EVM no endpoint `POST /hd/transfer`, com `network` no payload. O campo `derivationIndex` fica bloqueado por padrão na hot wallet; sweep HD deve usar signer dedicado e política própria.
 
-# Swappy BSC/BSC Core Signer 🛡️
+# ChainFX BSC/BSC Core Signer 🛡️
 ### Motor de Assinatura Criptográfica de Alta Performance e Isolamento de Chaves em Go
 
 O `signer` é um microsserviço isolado de infraestrutura crítica (isolado do Core público da API) responsável unicamente por gerenciar chaves privadas, derivar carteiras e assinar transações on-chain (EVM/BSC) para liquidação de ordens de compra (*Buy/Send*) e varreduras automáticas de depósitos (*Sweeping*).
