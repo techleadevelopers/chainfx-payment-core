@@ -46,17 +46,17 @@ k6 run tests/paymaster_stress.js -e BASE_URL=https://api.chainfx.store -e API_KE
 - `loadMobileConfig()` agora faz `panic()` imediato se `APP_ENV=production` e as vars nÃ£o foram definidas.
 - Em ambientes de dev/test, imprime warning severo em stderr.
 - Valida comprimento mÃ­nimo de 32 chars.
-- **Ação necessária:** defina `MOBILE_JWT_SECRET` e `MOBILE_REFRESH_SECRET` em produção **antes** do prÃ³ximo deploy.
+- **Ação necessária:** defina `MOBILE_JWT_SECRET` e `MOBILE_REFRESH_SECRET` em produção **antes** do próximo deploy.
 
 ---
 
 ### C-2 Â· WebSockets sem autenticação (`/ws/orders`, `/ws/notifications`)  
 **Arquivo:** `internal/mobile/server.go`, `internal/mobile/ws.go`  
-**Risco:** Qualquer pessoa nÃ£o autenticada podia abrir uma conexÃ£o WebSocket e receber atualizações de ordens de **todos os usuários** (o hub fazia broadcast global para o tÃ³pico `"orders"`).
+**Risco:** Qualquer pessoa nÃ£o autenticada podia abrir uma conexÃ£o WebSocket e receber atualizações de ordens de **todos os usuários** (o hub fazia broadcast global para o tópico `"orders"`).
 
 **Correção aplicada:**
 - Rotas `ws/orders` e `ws/notifications` agora estÃ£o envoltas em `requireAuth`.
-- `handleWSOrders` passou a usar tÃ³pico isolado `"orders:<uid>"` â€” broadcasts sÃ£o scoped por usuário.
+- `handleWSOrders` passou a usar tópico isolado `"orders:<uid>"` â€” broadcasts sÃ£o scoped por usuário.
 - `BroadcastOrderUpdate` recebe `userID` como primeiro argumento para garantir o scoping.
 - `ws/price` (feed pÃºblico de cotações) permanece sem auth â€” correto.
 
@@ -125,7 +125,7 @@ Depois filtrar `ListWebhookSubscriptions` por `agent_api_key_hash = shortMCPSecr
 
 ### A-2 Â· SSRF TOCTOU em entrega de webhook  
 **Arquivo:** `internal/webhooks/delivery.go`  
-**Status:** âœ… Já estava correto â€” `deliverOnce` chama `ValidateTargetURL` antes de cada entrega HTTP, nÃ£o sÃ³ na criação. O fix C-4 (fail-closed no DNS) fortalece isso.
+**Status:** âœ… Já estava correto â€” `deliverOnce` chama `ValidateTargetURL` antes de cada entrega HTTP, nÃ£o só na criação. O fix C-4 (fail-closed no DNS) fortalece isso.
 
 ---
 
@@ -133,7 +133,7 @@ Depois filtrar `ListWebhookSubscriptions` por `agent_api_key_hash = shortMCPSecr
 **Arquivo:** `internal/mcp/tools.go` (linhas 494, 1019)  
 **Risco:** Qualquer agente com MCP pode consultar status de qualquer ordem ou purchase se souber o UUID â€” sem verificação de ownership.
 
-**Status:** âš ï¸ Requer mudanÃ§a de schema (adicionar `agent_wallet` ou `buyer_api_key` Ã s tabelas de orders/purchases) para fix completo. Documentado com TODO no cÃ³digo.
+**Status:** âš ï¸ Requer mudanÃ§a de schema (adicionar `agent_wallet` ou `buyer_api_key` Ã s tabelas de orders/purchases) para fix completo. Documentado com TODO no código.
 
 **Mitigação imediata recomendada:** rate-limit severo em `toolGetOrderStatus` + alertas de anomalia (muitas consultas de UUIDs distintos por um agente).
 
@@ -184,7 +184,7 @@ canonical := fmt.Sprintf("%s|%s|%s|%s|%s", paymentType, amountBRL, pixKey, idemp
 
 ### M-2 Â· BUSD retornado em helpers de rate sem guard de legacy  
 **Arquivo:** `internal/mobile/assets.go` (funções `assetPriceInBRL` / `assetPriceInUSD`)  
-**Risco:** As funções helper aceitam `"BUSD"` como sÃ­mbolo válido e retornam cotação. Se algum caminho de cÃ³digo passar BUSD direto aos helpers, pode criar ilusÃ£o de que o ativo está disponÃ­vel.
+**Risco:** As funções helper aceitam `"BUSD"` como sÃ­mbolo válido e retornam cotação. Se algum caminho de código passar BUSD direto aos helpers, pode criar ilusÃ£o de que o ativo está disponÃ­vel.
 
 **Status:** `handleListAssets` filtra via `ListAssets(ctx, onlyEnabled=true)` â€” BUSD nÃ£o aparece na listagem pÃºblica. Os helpers sÃ£o seguros como está. Recomendação: adicionar `case "BUSD": return 0, fmt.Errorf("ativo desabilitado")` nos helpers para defesa em profundidade.
 
@@ -236,7 +236,7 @@ ALTER TABLE marketing_contacts
 
 ### M-7 Â· WebSocket `handleWSPrice` â€” sem proteção contra connection flooding  
 **Arquivo:** `internal/mobile/ws.go`  
-**Risco:** `ws/price` é pÃºblico e sem auth. Um atacante pode abrir 100k conexÃµes simultÃ¢neas, exaurindo file descriptors e memÃ³ria do servidor.
+**Risco:** `ws/price` é pÃºblico e sem auth. Um atacante pode abrir 100k conexÃµes simultÃ¢neas, exaurindo file descriptors e memória do servidor.
 
 **Recomendação:** limitar conexÃµes por IP via reverse proxy (Nginx: `limit_conn`) ou contador interno no `wsHub`.
 
@@ -315,7 +315,7 @@ ALTER TABLE assets ADD CONSTRAINT chk_symbol_upper CHECK (symbol = UPPER(symbol)
 | # | Arquivo | MudanÃ§a |
 |---|---------|---------|
 | C-1 | `internal/mobile/server.go` | Panic em produção com secrets padrÃ£o; warning em dev |
-| C-2 | `internal/mobile/server.go` + `ws.go` | Auth obrigatÃ³ria em WS /orders e /notifications; broadcast scoped por uid |
+| C-2 | `internal/mobile/server.go` + `ws.go` | Auth obrigatória em WS /orders e /notifications; broadcast scoped por uid |
 | C-3 | `internal/mobile/server.go` | `requireAuth` em `/kyc/limits` |
 | C-4 | `internal/mobile/helpers_phase5.go` | SSRF DNS fail-closed (era fail-open) |
 | C-5 | `kyc_v2.go`, `notifications.go`, `assets.go`, `orders.go`, `swap.go` | Mensagens de erro genéricas + slog interno |
@@ -325,15 +325,15 @@ ALTER TABLE assets ADD CONSTRAINT chk_symbol_upper CHECK (symbol = UPPER(symbol)
 
 ---
 
-## PrÃ³ximos Passos Prioritários
+## Próximos Passos Prioritários
 
-1. **Imediato:** definir `MOBILE_JWT_SECRET` e `MOBILE_REFRESH_SECRET` em produção (>= 32 chars, aleatÃ³rios).
+1. **Imediato:** definir `MOBILE_JWT_SECRET` e `MOBILE_REFRESH_SECRET` em produção (>= 32 chars, aleatórios).
 2. **Esta semana:** migração de schema para ownership em `webhook_subscriptions` (C-7).
 3. **Esta semana:** rate limiting no endpoint `/mcp/tools/call` por API key (A-5).
-4. **PrÃ³ximo sprint:** alerta de overpayment no Prometheus/Grafana (A-6).
-5. **PrÃ³ximo sprint:** migrar cálculos M2M para `shopspring/decimal` (A-4).
-6. **PrÃ³ximo sprint:** constraints de FK em `swaps`, constraint de case em `assets` (M-5, B-6).
-7. **PrÃ³ximo sprint:** validação de mÃ­nimo de confirmações on-chain (M-3).
+4. **Próximo sprint:** alerta de overpayment no Prometheus/Grafana (A-6).
+5. **Próximo sprint:** migrar cálculos M2M para `shopspring/decimal` (A-4).
+6. **Próximo sprint:** constraints de FK em `swaps`, constraint de case em `assets` (M-5, B-6).
+7. **Próximo sprint:** validação de mÃ­nimo de confirmações on-chain (M-3).
 
 
 
