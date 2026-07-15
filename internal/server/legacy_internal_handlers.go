@@ -51,7 +51,7 @@ func (s *Server) legacyHandleEmailTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Subject == "" {
-		req.Subject = "Swappy Financial - teste SMTP"
+		req.Subject = "ChainFX Payments - teste SMTP"
 	}
 	if req.Body == "" {
 		req.Body = "ServiÃ§o de email operacional ativo."
