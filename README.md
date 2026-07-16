@@ -1105,11 +1105,19 @@ TREASURY_LOCKDOWN_THRESHOLD=0
 
 Mais detalhes em [ARCHITECTURE.md](./ARCHITECTURE.md#deploy).
 
-No Railway, `SIGNER_URL` da API principal deve apontar para a rede privada do service do signer, nao para `https://...up.railway.app`. Se o service do signer se chama `signer` e escuta `PORT=4010`, use:
+No Railway, `SIGNER_URL` da API principal deve apontar para a rede privada do service do signer, nao para `https://...up.railway.app`. Se o service do signer se chama `signer` e escuta `PORT_SIGNER=4010`, use:
 
 ```env
 SIGNER_URL=http://signer.railway.internal:4010
 ```
+
+No service do signer, use:
+
+```env
+PORT_SIGNER=4010
+```
+
+Assim `PORT` continua livre para a API/gateway.
 
 O dominio publico `*.up.railway.app` fica bloqueado em producao porque exporia o signer na internet. O aviso `Arquivo .env nao encontrado` e normal em cloud quando as variaveis estao configuradas pelo painel do Railway.
 
