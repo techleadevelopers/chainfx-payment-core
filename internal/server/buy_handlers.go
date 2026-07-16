@@ -102,6 +102,12 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		BirthDate: firstNonEmpty(req.Customer.BirthDate, req.BirthDate),
 		Address:   firstNonNilMap(req.Customer.Address, req.AddressPayload),
 	}
+	if fiatCurrency == "BRL" && paymentMethod == "pix" && s.efiPixConfigured() {
+		if err := validateEfiPixCustomer(customerInput); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "INVALID_CUSTOMER_DOCUMENT", "error": err.Error()})
+			return
+		}
+	}
 	cardInput := paymentCardInput{
 		PaymentToken:   firstNonEmpty(req.Card.PaymentToken, req.PaymentToken),
 		Brand:          firstNonEmpty(req.Card.Brand, req.CardBrand),
