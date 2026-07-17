@@ -92,16 +92,6 @@ func (s *Server) handleDeveloperConsoleSummary(w http.ResponseWriter, r *http.Re
 		writeError(w, err)
 		return
 	}
-	capabilities, err := s.db.ListMarketplaceCapabilities(r.Context(), database.MarketplaceProductFilters{})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	products, err := s.db.ListMarketplaceProducts(r.Context(), database.MarketplaceProductFilters{})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
 	projects, err := s.db.ListDeveloperProjects(r.Context(), limit)
 	if err != nil {
 		writeError(w, err)
@@ -113,21 +103,19 @@ func (s *Server) handleDeveloperConsoleSummary(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"workspace":       "developer",
-		"generatedAt":     time.Now().UTC(),
-		"authMode":        auth.Mode,
-		"sandbox":         auth.Sandbox,
-		"navigation":      developerConsoleNavigation(),
-		"dashboard":       dashboard,
-		"metrics":         developerConsoleMetrics(dashboard),
-		"projects":        projects,
-		"apiKeys":         map[string]any{"items": apiKeys, "legacyEnv": s.developerDashboardAPIKeys()},
-		"mcpConnections":  developerMCPConnections(publicBaseURL(r), auth),
-		"apiExplorer":     developerAPIExplorer(),
-		"capabilities":    capabilities,
-		"products":        products,
-		"providerPublish": providerPublishSpec(),
-		"billing":         developerBillingSummary(dashboard),
+		"workspace":   "developer",
+		"generatedAt": time.Now().UTC(),
+		"authMode":    auth.Mode,
+		"sandbox":     auth.Sandbox,
+		"scope":       developerIntegrationScope(),
+		"navigation":  developerConsoleNavigation(),
+		"dashboard":   dashboard,
+		"metrics":     developerConsoleMetrics(dashboard),
+		"projects":    projects,
+		"apiKeys":     map[string]any{"items": apiKeys, "legacyEnv": s.developerDashboardAPIKeys()},
+		"buySellFlow": developerBuySellFlow(publicBaseURL(r)),
+		"apiExplorer": developerAPIExplorer(),
+		"billing":     developerBillingSummary(dashboard),
 	})
 }
 
@@ -144,7 +132,7 @@ func agentConsoleNavigation() []string {
 }
 
 func developerConsoleNavigation() []string {
-	return []string{"Overview", "Projects", "API Keys", "MCP Connections", "Capabilities", "Products", "Usage", "Requests", "Webhooks", "Events", "Logs", "Analytics", "Billing", "Team", "Documentation", "Settings"}
+	return []string{"Overview", "Projects", "API Keys", "Buy/Sell API", "Quotes", "Orders", "Requests", "Webhooks", "Events", "Logs", "Analytics", "Billing", "Team", "Documentation", "Settings"}
 }
 
 func agentConsoleMetrics(agents []*database.ConsoleAgentSummary, capabilities []*database.MarketplaceCapability, purchases []*database.MarketplacePurchaseSummary, executions []*database.MarketplaceUsageSummary, settlements []*database.ConsoleSettlementSummary) map[string]any {
@@ -201,15 +189,15 @@ func developerConsoleMetrics(dashboard *database.DeveloperDashboardSummary) map[
 		webhookSuccess = fmt.Sprintf("%.2f%%", float64(dashboard.Webhooks.Deliveries24h)*100/float64(total))
 	}
 	return map[string]any{
-		"apiRequests":    apiRequests,
-		"mcpToolCalls":   count("mcpCalls24h"),
-		"activeAPIKeys":  6,
-		"webhookSuccess": webhookSuccess,
-		"errorRate":      errorRate,
-		"currentSpend":   "142 USDT",
-		"latencyP50":     "82 ms",
-		"latencyP95":     "248 ms",
-		"latencyP99":     "810 ms",
+		"apiRequests":     apiRequests,
+		"buySellRequests": apiRequests,
+		"activeAPIKeys":   6,
+		"webhookSuccess":  webhookSuccess,
+		"errorRate":       errorRate,
+		"currentSpend":    "REST buy/sell billing",
+		"latencyP50":      "82 ms",
+		"latencyP95":      "248 ms",
+		"latencyP99":      "810 ms",
 	}
 }
 
@@ -269,24 +257,21 @@ func developerConsoleProjects() []map[string]any {
 	}
 }
 
-func developerMCPConnections(base string, auth chainFXAuth) []map[string]any {
-	return []map[string]any{{
-		"client":          "Codex",
-		"status":          "connected",
-		"lastHandshake":   time.Now().UTC().Add(-2 * time.Minute),
-		"protocolVersion": "2024-11-05",
-		"tools":           25,
-		"resources":       8,
-		"prompts":         5,
-		"latencyMs":       182,
-		"environment":     map[bool]string{true: "Sandbox", false: "Production"}[auth.Sandbox],
-		"config": map[string]any{"mcpServers": map[string]any{"chainfx": map[string]any{
-			"url": base + "/mcp",
-			"headers": map[string]string{
-				"Authorization": "Bearer sk_live_...",
-			},
-		}}},
-	}}
+func developerBuySellFlow(base string) map[string]any {
+	return map[string]any{
+		"purpose": "Use ChainFX as a REST crypto buy/sell fallback inside a developer product.",
+		"baseUrl": base,
+		"steps": []map[string]string{
+			{"step": "rates", "method": "GET", "path": "/rates"},
+			{"step": "quote", "method": "POST", "path": "/quote"},
+			{"step": "buy_crypto", "method": "POST", "path": "/buy"},
+			{"step": "sell_crypto", "method": "POST", "path": "/sell"},
+			{"step": "order_status", "method": "GET", "path": "/order/{id}"},
+			{"step": "webhook_delivery", "method": "POST", "path": "developer-configured webhook URL"},
+		},
+		"auth":          "Authorization: Bearer sk_live_xxx or sk_test_xxx",
+		"agentSurfaces": "MCP, Agent Pay, A2A, x402 and capability marketplace are intentionally separated from this developer flow.",
+	}
 }
 
 func developerAPIExplorer() []map[string]any {
@@ -295,9 +280,7 @@ func developerAPIExplorer() []map[string]any {
 		{"group": "Quotes", "method": "POST", "path": "/quote", "body": `{"side":"buy","asset":"USDT","fiatCurrency":"BRL","amountFiat":100}`},
 		{"group": "Buy", "method": "POST", "path": "/buy", "body": `{"quoteId":"qt_...","destAddress":"0x..."}`},
 		{"group": "Sell", "method": "POST", "path": "/sell", "body": `{"quoteId":"qt_...","senderWallet":"0x..."}`},
-		{"group": "Marketplace", "method": "POST", "path": "/marketplace/capabilities/{id}/purchase", "body": `{"agentWallet":"0x...","payerWallet":"0x...","idempotencyKey":"idem_...","nonce":"n_..."}`},
-		{"group": "Agent Rail", "method": "POST", "path": "/agent/v1/trade/quote", "body": `{"payAsset":"USDT","receiveAsset":"USDC","amount":100}`},
-		{"group": "MCP", "method": "POST", "path": "/mcp/tools/list", "body": "{}"},
+		{"group": "Orders", "method": "GET", "path": "/order/{id}", "body": "{}"},
 		{"group": "Webhooks", "method": "POST", "path": "/api/webhooks/subscriptions", "body": `{"url":"https://example.com/webhook","events":["payment.completed"]}`},
 	}
 }
