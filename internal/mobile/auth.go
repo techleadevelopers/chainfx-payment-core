@@ -93,6 +93,13 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "token inválido ou expirado"})
 			return
 		}
+		if s.db != nil {
+			active, err := mobileDB(s.db).IsUserActive(r.Context(), claims.Sub)
+			if err != nil || !active {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "usuario nao encontrado ou conta excluida"})
+				return
+			}
+		}
 		ctx := context.WithValue(r.Context(), ctxUserID, claims.Sub)
 		next(w, r.WithContext(ctx))
 	}
