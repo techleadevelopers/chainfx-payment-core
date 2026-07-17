@@ -65,6 +65,9 @@ const report = {
     agntcy_fetched: false,
     oasf_fetched: false,
     registry_record_fetched: false,
+    policy_discovery_fetched: false,
+    capability_graph_fetched: false,
+    policy_required_detected: false,
   },
   selected_skills: {},
   steps: [],
@@ -315,8 +318,10 @@ async function main() {
     const agntcyUrl = absoluteFromCard(cardUrl, card.registry?.agntcy || '/.well-known/agntcy.json');
     const oasfUrl = absoluteFromCard(cardUrl, card.registry?.oasf || '/.well-known/oasf.json');
     const registryRecordUrl = absoluteFromCard(cardUrl, card.registry?.signedRecord || '/agent/v1/registry-records/agntcy-oasf');
+    const policyDiscoveryUrl = absoluteFromCard(cardUrl, card.planning?.policy_discovery || '/.well-known/agent-policy.json');
+    const capabilityGraphUrl = absoluteFromCard(cardUrl, card.planning?.capability_graph || '/.well-known/capability-graph.json');
 
-    const [jwksResponse, signatureResponse, reputationResponse, slaResponse, x402DiscoveryResponse, registriesResponse, agntcyResponse, oasfResponse, registryRecordResponse] = await Promise.all([
+    const [jwksResponse, signatureResponse, reputationResponse, slaResponse, x402DiscoveryResponse, registriesResponse, agntcyResponse, oasfResponse, registryRecordResponse, policyDiscoveryResponse, capabilityGraphResponse] = await Promise.all([
       requestJSON(jwksUrl),
       requestJSON(signatureUrl),
       requestJSON(reputationUrl),
@@ -326,6 +331,8 @@ async function main() {
       requestJSON(agntcyUrl),
       requestJSON(oasfUrl),
       requestJSON(registryRecordUrl),
+      requestJSON(policyDiscoveryUrl),
+      requestJSON(capabilityGraphUrl),
     ]);
     addStep('fetch_agent_trust_documents', {
       requests: { jwks_url: jwksUrl, signature_url: signatureUrl, reputation_url: reputationUrl, sla_url: slaUrl },
@@ -339,6 +346,8 @@ async function main() {
         agntcy: { status: agntcyResponse.status, latency_ms: agntcyResponse.latency_ms, body: compactBody(agntcyResponse.body) },
         oasf: { status: oasfResponse.status, latency_ms: oasfResponse.latency_ms, body: compactBody(oasfResponse.body) },
         registry_record: { status: registryRecordResponse.status, latency_ms: registryRecordResponse.latency_ms, body: compactBody(registryRecordResponse.body) },
+        policy_discovery: { status: policyDiscoveryResponse.status, latency_ms: policyDiscoveryResponse.latency_ms, body: compactBody(policyDiscoveryResponse.body) },
+        capability_graph: { status: capabilityGraphResponse.status, latency_ms: capabilityGraphResponse.latency_ms, body: compactBody(capabilityGraphResponse.body) },
       },
     });
     report.checks.jwks_fetched = jwksResponse.ok;
@@ -350,6 +359,8 @@ async function main() {
     report.checks.agntcy_fetched = agntcyResponse.ok;
     report.checks.oasf_fetched = oasfResponse.ok;
     report.checks.registry_record_fetched = registryRecordResponse.ok;
+    report.checks.policy_discovery_fetched = policyDiscoveryResponse.ok;
+    report.checks.capability_graph_fetched = capabilityGraphResponse.ok;
     if (jwksResponse.ok && signatureResponse.ok) {
       const verification = verifyAgentCardSignature(cardResponse.text, signatureResponse.body, jwksResponse.body);
       report.agent_card_verification = verification;
@@ -474,6 +485,15 @@ async function main() {
     }
 
     if (!createResponse.ok) {
+      const code = createResponse.body?.error?.code || createResponse.body?.error?.error?.code || createResponse.body?.code;
+      if (code === 'AGENT_POLICY_REQUIRED') {
+        report.completed = false;
+        report.outcome = 'policy_required_before_payment_intent';
+        report.failed_at = 'agent_policy_required';
+        report.checks.policy_required_detected = true;
+        report.next_action = 'Call /agent/connect or configure an active policy for CHAINFX_AGENT_WALLET, then rerun this QA.';
+        return;
+      }
       report.failed_at = 'pay_pix_with_usdt';
       throw new Error(`Payment intent creation failed with HTTP ${createResponse.status}`);
     }
