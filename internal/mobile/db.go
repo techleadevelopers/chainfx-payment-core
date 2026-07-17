@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"payment-gateway/internal/database"
@@ -25,6 +26,7 @@ func mobileDB(db *database.DB) *mobileQueries {
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 func (q *mobileQueries) CreateUser(ctx context.Context, email, passwordHash, fullName, phone string) (*models.User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
 	var id string
 	err := q.sql.QueryRowContext(ctx, `
                 INSERT INTO users (email, password_hash, full_name, phone)
@@ -37,11 +39,12 @@ func (q *mobileQueries) CreateUser(ctx context.Context, email, passwordHash, ful
 }
 
 func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
                 SELECT id,email,phone,full_name,password_hash,wallet_address,pix_key,
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
-                FROM users WHERE email=$1 AND deleted_at IS NULL`, email))
+                FROM users WHERE lower(email)=lower($1) AND deleted_at IS NULL`, email))
 }
 
 func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.User, error) {
