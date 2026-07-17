@@ -210,7 +210,7 @@ schema_agent_pricing.sql
 ### Camadas atuais
 
 - **Web/Admin**: `admin.html` opera testes, observabilidade, signer probes, Agent QA, developers, MCP, x402, registries e episodes.
-- **Web Developer**: `index.html#developers` e `/app/developer/` documentam API keys, MCP, Agent Pay, capability network e billing.
+- **Web Developer**: `index.html#developers`, `/developers` e `/app/developer/` focam no fluxo humano/empresa de REST buy/sell, quotes, order status, API keys e webhooks. MCP, Agent Pay, A2A, x402 e capability network ficam separados na superficie Agent/M2M.
 - **Mobile**: endpoints `/api/mobile/*` atendem wallet, orders, PIX, DCA, security, notifications e WebSocket.
 - **REST Core**: buy/sell, rates, order status, PSP, webhooks, gas station, developer projects e API keys.
 - **MCP**: `/mcp/initialize`, `/mcp/tools/list`, `/mcp/tools/call`, `/mcp/resources/list` e `/mcp/resources/read` expõem tools e resources para hosts de agentes.
@@ -1071,11 +1071,12 @@ Rotas operacionais:
 - `/developers/logs`
 - `/developers/api-keys`
 
-O dashboard e protegido por API key ChainFX (`Authorization: Bearer ...` ou `?apiKey=...`) e mostra:
+O dashboard e protegido por API key ChainFX (`Authorization: Bearer ...` ou `?apiKey=...`) e mostra somente o fluxo developer humano:
 
 - API keys mascaradas.
 - API logs reais de `api_request_logs`, sem payload sensivel e sem API key em texto aberto.
-- MCP tool calls de `mcp_tool_logs`, incluindo tool, status, erro e latencia.
+- Superficie REST para `rates`, `quote`, `buy`, `sell`, `order status` e webhooks.
+- Separacao explicita: MCP, Agent Pay, A2A, x402, planner e capability marketplace sao superficies Agent/M2M, nao o fluxo principal do painel developer.
 - Purchases recentes do marketplace/capability exchange.
 - Usage/execution events de `marketplace_execution_events`.
 - Status agregado de webhooks, assinaturas ativas, entregas e falhas.
