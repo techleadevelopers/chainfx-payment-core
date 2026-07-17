@@ -352,6 +352,7 @@ func (s *Server) handleDevelopersDashboard(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{
 			"authMode":        auth.Mode,
 			"sandbox":         auth.Sandbox,
+			"scope":           developerIntegrationScope(),
 			"dashboard":       dashboard,
 			"apiKeys":         s.developerDashboardAPIKeys(),
 			"productionNotes": s.developerDashboardProductionNotes(),
@@ -374,9 +375,20 @@ func (s *Server) developerDashboardAPIKeys() map[string]any {
 
 func (s *Server) developerDashboardProductionNotes() []string {
 	return []string{
-		"API keys are never stored in plaintext in request/tool logs; only short hashes are recorded.",
-		"MCP mock_dev fallback and seed fixtures are not production providers.",
+		"Developer API keys are for REST buy/sell, quote, order status and webhook operations.",
+		"Agent Pay, MCP, A2A, x402 and capability marketplace live under the agent/M2M surfaces, not the human developer dashboard.",
+		"API keys are never stored in plaintext in request logs; only short hashes are recorded.",
 		"Redis-backed rate limiting remains optional until multi-instance deployment is enabled.",
+	}
+}
+
+func developerIntegrationScope() map[string]any {
+	return map[string]any{
+		"audience": "human_developer",
+		"purpose":  "Embed ChainFX as a crypto buy/sell fallback in an external product.",
+		"included": []string{"rates", "quote", "buy", "sell", "order_status", "api_keys", "webhooks", "request_logs"},
+		"excluded": []string{"mcp", "agent_pay", "a2a", "x402", "capability_marketplace", "agent_planner"},
+		"auth":     "Authorization: Bearer sk_live_xxx or sk_test_xxx",
 	}
 }
 
@@ -395,41 +407,6 @@ func (s *Server) renderDeveloperDashboardHTML(r *http.Request, dashboard *databa
 			item.StatusCode,
 			item.DurationMS,
 			html.EscapeString(item.APIKeyHash),
-		))
-	}
-	mcpRows := strings.Builder{}
-	for _, item := range dashboard.MCPLogs {
-		mcpRows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td>%s</td><td>%dms</td><td><code>%s</code></td><td>%s</td></tr>`,
-			html.EscapeString(item.CreatedAt.Format(time.RFC3339)),
-			html.EscapeString(item.ToolName),
-			html.EscapeString(item.Status),
-			item.DurationMS,
-			html.EscapeString(item.APIKeyHash),
-			html.EscapeString(item.ErrorMessage),
-		))
-	}
-	purchaseRows := strings.Builder{}
-	for _, item := range dashboard.Purchases {
-		purchaseRows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s %s</td><td>%s</td></tr>`,
-			html.EscapeString(item.CreatedAt.Format(time.RFC3339)),
-			html.EscapeString(item.ID),
-			html.EscapeString(item.ProductID),
-			html.EscapeString(item.Status),
-			html.EscapeString(item.GrossAmount),
-			html.EscapeString(item.PaymentAsset),
-			html.EscapeString(item.Network),
-		))
-	}
-	usageRows := strings.Builder{}
-	for _, item := range dashboard.Usage {
-		usageRows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%d</td><td>%dms</td></tr>`,
-			html.EscapeString(item.CreatedAt.Format(time.RFC3339)),
-			html.EscapeString(item.CapabilityID),
-			html.EscapeString(item.ProviderSlug),
-			html.EscapeString(item.Status),
-			item.UnitsConsumed,
-			item.QuotaRemaining,
-			item.LatencyMS,
 		))
 	}
 	webhookDeliveries, webhookFailures := 0, 0
@@ -464,8 +441,8 @@ func (s *Server) renderDeveloperDashboardHTML(r *http.Request, dashboard *databa
 <body>
   <header>
     <h1>ChainFX Developer Dashboard</h1>
-    <p>Production operations for APIs, MCP, Capability Marketplace, usage, billing and webhooks.</p>
-    <div class="actions"><a href="/developers/dashboard.json">Dashboard JSON</a><a href="/developers/api-keys">API Keys JSON</a><a href="/openapi.json">OpenAPI</a><a href="/.well-known/ai-services.json">Agent Discovery</a></div>
+    <p>Developer integration for REST buy/sell, quotes, order status, API keys and webhooks. Agent Pay and MCP stay on the agent/M2M surfaces.</p>
+    <div class="actions"><a href="/developers/dashboard.json">Dashboard JSON</a><a href="/developers/api-keys">API Keys JSON</a><a href="/openapi.json">OpenAPI</a><a href="/rates">Rates</a></div>
   </header>
   <main>
     <section class="grid">
@@ -478,25 +455,23 @@ func (s *Server) renderDeveloperDashboardHTML(r *http.Request, dashboard *databa
     </section>
     <h2>API Logs</h2>
     <table><thead><tr><th>At</th><th>Request</th><th>Method</th><th>Path</th><th>Status</th><th>Latency</th><th>Key hash</th></tr></thead><tbody>%s</tbody></table>
-    <h2>MCP Tool Calls</h2>
-    <table><thead><tr><th>At</th><th>Tool</th><th>Status</th><th>Latency</th><th>Key hash</th><th>Error</th></tr></thead><tbody>%s</tbody></table>
-    <h2>Marketplace Purchases</h2>
-    <table><thead><tr><th>At</th><th>Purchase</th><th>Product</th><th>Status</th><th>Gross</th><th>Network</th></tr></thead><tbody>%s</tbody></table>
-    <h2>Capability Usage</h2>
-    <table><thead><tr><th>At</th><th>Capability</th><th>Provider</th><th>Status</th><th>Units</th><th>Quota</th><th>Latency</th></tr></thead><tbody>%s</tbody></table>
+    <section class="split" style="margin-top:18px">
+      <div class="panel"><h2>Developer Buy/Sell Surface</h2><p><code>GET /rates</code></p><p><code>POST /quote</code></p><p><code>POST /buy</code></p><p><code>POST /sell</code></p><p><code>GET /order/{id}</code></p></div>
+      <div class="panel"><h2>Separated Agent Surface</h2><p class="muted">MCP, Agent Pay, A2A, x402, planner and capability marketplace are available for autonomous agents, but are intentionally outside this human developer dashboard.</p></div>
+    </section>
   </main>
 </body>
 </html>`,
 		card("API logs 24h", dashboard.Counts["apiLogs24h"], "HTTP requests"),
-		card("MCP calls 24h", dashboard.Counts["mcpCalls24h"], "tool calls"),
-		card("Capability usage 24h", dashboard.Counts["capabilityUsage24h"], "executions"),
-		card("Purchases 24h", dashboard.Counts["purchases24h"], "marketplace intents"),
-		card("Active purchases", dashboard.Counts["activePurchases"], "granted access"),
+		card("Buy/Sell routes", "REST", "rates, quote, buy, sell, order"),
+		card("Auth mode", auth.Mode, "sk_live/sk_test bearer"),
+		card("Sandbox", auth.Sandbox, "test keys use sandbox semantics"),
+		card("API keys", "configured", "masked live/test groups"),
 		card("Webhook deliveries 24h", webhookDeliveries, "outbound callbacks"),
 		card("Webhook failures 24h", webhookFailures, "delivery errors"),
 		card("Active webhooks", webhookActive, "subscriptions"),
 		keys["livePublic"], keys["liveSecret"], keys["testPublic"], keys["testSecret"],
-		notes.String(), apiRows.String(), mcpRows.String(), purchaseRows.String(), usageRows.String(),
+		notes.String(), apiRows.String(),
 	)
 }
 
