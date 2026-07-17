@@ -20,6 +20,7 @@ Trust checks covered:
 - Agent policy discovery and capability graph planning documents.
 - Agent Graph v2 validation, including `pay_pix_with_usdt` dependencies, outputs, failure modes, recovery actions, cost source, latency target and phase report.
 - Capability compositions discovery and Planner API validation. The planner call is non-executing and must return steps, missing requirements, estimated cost and estimated latency.
+- Episode-derived reputation validation and Capability Graph Registry validation for Phase 3 provider comparison.
 
 ## Run discovery without credentials
 
@@ -65,3 +66,13 @@ The QA report includes `capability_compositions`, `planner_api` and these checks
 - `planner_api_validated`
 
 For Phase 2 to pass, `/.well-known/capability-compositions.json` must expose a `planning_layer_report`, and `POST /agent/v1/plans` must return a non-executing plan with `plan_id`, `steps`, `missing_requirements`, `estimated_cost_usdt`, `estimated_latency_ms`, and `executes_now: false`.
+
+## Reputation + Graph Registry acceptance
+
+The QA report includes `episode_derived_reputation`, `graph_registry` and these checks:
+
+- `episode_reputation_validated`
+- `graph_registry_fetched`
+- `graph_registry_validated`
+
+For Phase 3 to pass, `/.well-known/agent-reputation.json` must expose `phase_report.id = reputation_graph_registry_report` and a nested `reputation` object with score, success rate, latency percentiles and per-skill metrics. `/.well-known/capability-graph-registry.json` must connect payment, marketplace, stablecoin, trust, planning and observability groups and publish a `reputation_graph_registry_report`.
