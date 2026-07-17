@@ -14,7 +14,7 @@ func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "usuário não encontrado"})
 		return
 	}
-	writeJSON(w, http.StatusOK, sanitizeUser(user))
+	writeJSON(w, http.StatusOK, s.sanitizeUser(user))
 }
 
 func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +47,7 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, _ := mobileDB(s.db).GetUserByID(r.Context(), uid)
-	writeJSON(w, http.StatusOK, sanitizeUser(user))
+	writeJSON(w, http.StatusOK, s.sanitizeUser(user))
 }
 
 // handleDeleteAccount soft-deletes and anonymizes the authenticated mobile account.
