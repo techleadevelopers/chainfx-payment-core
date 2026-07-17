@@ -39,6 +39,10 @@ type Server struct {
 	requestLogDrops  atomic.Int64
 	discoveryCache   map[string]cachedDiscoveryDocument
 	discoveryCacheMu sync.Mutex
+	agentEpisodes    []agentEpisode
+	agentEpisodesMu  sync.Mutex
+	a2aTasks         map[string]*a2aTask
+	a2aTasksMu       sync.Mutex
 	pspRouter        *psp.Router // PSP abstraction; nil = legacy inline Efí parsing
 
 	// Chaos / adversarial engine (optional — wired from main.go).
@@ -88,6 +92,7 @@ func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, 
 		eipProbes:        newEIPProbeRunner(cfg, db),
 		requestLogQueue:  make(chan database.APIRequestLogInput, 4096),
 		discoveryCache:   make(map[string]cachedDiscoveryDocument),
+		a2aTasks:         make(map[string]*a2aTask),
 	}
 	if db != nil {
 		go s.runRequestLogWorker()
