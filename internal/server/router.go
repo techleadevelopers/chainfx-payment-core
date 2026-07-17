@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /developer/api-keys/{id}/rotate", s.handleRotateDeveloperAPIKey)
 	mux.HandleFunc("POST /developer/api-keys/{id}/{status}", s.handleSetDeveloperAPIKeyStatus)
 	mux.HandleFunc("POST /api/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("POST /api/developer/login", s.handleDeveloperLogin)
 	mux.HandleFunc("GET /api/admin/overview", s.handleAdminOverview)
 	mux.HandleFunc("GET /api/admin/transactions", s.handleAdminTransactions)
 	mux.HandleFunc("POST /api/admin/signer/probe", s.handleAdminSignerProbe)
