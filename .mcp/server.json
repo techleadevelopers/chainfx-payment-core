@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.techleadevelopers/chainfx-mcp",
   "title": "ChainFX Capability Network",
-  "description": "ChainFX Agent Pay lets autonomous agents pay PIX recipients and card bills by funding intents with USDT on BSC.",
+  "description": "Agent Pay for PIX and card bills funded with USDT on BSC.",
   "websiteUrl": "https://www.chainfx.store",
   "repository": {
     "url": "https://github.com/chainfx/payment-gateway",
     "source": "github"
   },
-  "version": "1.3.3",
+  "version": "1.3.4",
   "remotes": [
     {
       "type": "streamable-http",
@@ -26,7 +26,7 @@
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "tool": "mcp-publisher",
-      "version": "1.3.3",
+      "version": "1.3.4",
       "build_info": {
         "service": "chainfx-mcp",
         "public_title": "ChainFX Capability Network MCP",
@@ -95,7 +95,12 @@
           "pay_card_bill_with_usdt",
           "get_payment_status",
           "quote_required_usdt",
-          "list_supported_payment_methods"
+          "list_supported_payment_methods",
+          "stablecoin_exchange",
+          "capability_exchange",
+          "semantic_memory",
+          "document_ocr",
+          "llm_chat"
         ]
       },
       "agent_payments": {
