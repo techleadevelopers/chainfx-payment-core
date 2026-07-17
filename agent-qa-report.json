@@ -1,0 +1,337 @@
+{
+  "started_at": "2026-07-17T18:49:14.880Z",
+  "card_url": "https://api-production-bc748.up.railway.app/.well-known/agent-card.json",
+  "objective": "Discover ChainFX Agent Pay from Agent Card only and execute A2A payment flow.",
+  "inputs": {
+    "amount_brl": "10.00",
+    "pix_key_configured": true,
+    "agent_wallet_configured": true,
+    "bearer_configured": true
+  },
+  "checks": {
+    "card_fetched": true,
+    "a2a_url_detected": true,
+    "skills_detected": true,
+    "payment_skill_selected": true,
+    "quote_called": true,
+    "auth_handled": true,
+    "intent_created": false,
+    "status_checked": false
+  },
+  "selected_skills": {
+    "methods": "list_supported_payment_methods",
+    "quote": "quote_required_usdt",
+    "payPix": "pay_pix_with_usdt",
+    "status": "get_payment_status"
+  },
+  "steps": [
+    {
+      "name": "fetch_agent_card",
+      "at": "2026-07-17T18:49:16.189Z",
+      "request": {
+        "url": "https://api-production-bc748.up.railway.app/.well-known/agent-card.json",
+        "method": "GET"
+      },
+      "response": {
+        "status": 200,
+        "latency_ms": 1290,
+        "body": {
+          "authentication": {
+            "description": "Send Authorization: Bearer <ChainFX API key> for payment creation, quotes and private status.",
+            "type": "bearer"
+          },
+          "capabilities": {
+            "pushNotifications": false,
+            "stateTransitionHistory": true,
+            "streaming": false
+          },
+          "defaultInputModes": [
+            "application/json"
+          ],
+          "defaultOutputModes": [
+            "application/json"
+          ],
+          "description": "Stablecoin-funded real-world payments for autonomous agents.",
+          "endpoints": {
+            "a2a": "https://api-production-bc748.up.railway.app/a2a",
+            "agent_pay": "https://api-production-bc748.up.railway.app/agent/v1/pay",
+            "ai_services": "https://api-production-bc748.up.railway.app/.well-known/ai-services.json",
+            "mcp": "https://api-production-bc748.up.railway.app/mcp/initialize",
+            "onboarding": "https://api-production-bc748.up.railway.app/agent-pay.json",
+            "openapi": "https://api-production-bc748.up.railway.app/openapi.json",
+            "status": "https://api-production-bc748.up.railway.app/agent/v1/pay/{id}"
+          },
+          "name": "ChainFX Agent Pay",
+          "protocol": "a2a",
+          "provider": {
+            "organization": "ChainFX",
+            "url": "https://www.chainfx.store"
+          },
+          "skills": [
+            {
+              "description": "Create a PIX payment intent funded by an autonomous agent with USDT on BSC.",
+              "id": "pay_pix_with_usdt",
+              "name": "Pay PIX with USDT",
+              "tags": [
+                "payments",
+                "pix",
+                "usdt",
+                "bsc",
+                "a2a"
+              ]
+            },
+            {
+              "description": "Create a card bill or payment-link intent funded by USDT on BSC.",
+              "id": "pay_card_bill_with_usdt",
+              "name": "Pay card bill with USDT",
+              "tags": [
+                "payments",
+                "credit_card",
+                "usdt",
+                "bsc",
+                "a2a"
+              ]
+            },
+            {
+              "description": "Read an agent payment intent lifecycle status, deposit data and settlement receipt.",
+              "id": "get_payment_status",
+              "name": "Get payment status",
+              "tags": [
+                "payments",
+                "status",
+                "settlement"
+              ]
+            },
+            {
+              "description": "Estimate gross USDT, fee and required USDT for a BRL payment amount.",
+              "id": "quote_required_usdt",
+              "name": "Quote required USDT",
+              "tags": [
+                "quote",
+                "pricing",
+                "usdt"
+              ]
+            },
+            {
+              "description": "List supported fiat payment rails and stablecoin funding rails.",
+              "id": "list_supported_payment_methods",
+              "name": "List supported payment methods",
+              "tags": [
+                "discovery",
+                "payments"
+              ]
+            },
+            {
+              "description": "Quote BSC stablecoin exchanges such as USDT to USDC through ChainFX Agent Rail.",
+              "id": "stablecoin_exchange",
+              "name": "Stablecoin exchange",
+              "tags": [
+                "stablecoin",
+                "exchange",
+                "usdt",
+                "usdc",
+                "bsc"
+              ]
+            },
+            {
+              "description": "Discover purchasable and executable capabilities available to autonomous agents.",
+              "id": "capability_exchange",
+              "name": "Capability exchange",
+              "tags": [
+                "capabilities",
+                "marketplace",
+                "discovery"
+              ]
+            },
+            {
+              "description": "Discover persistent memory operations for agent context and knowledge lookup.",
+              "id": "semantic_memory",
+              "name": "Semantic memory",
+              "tags": [
+                "memory",
+                "agent-state",
+                "capability"
+              ]
+            },
+            {
+              "description": "Discover OCR operations for extracting and structuring document text.",
+              "id": "document_ocr",
+              "name": "Document OCR",
+              "tags": [
+                "ocr",
+                "documents",
+                "capability"
+              ]
+            },
+            {
+              "description": "Discover provider-routed text generation, chat, summarization and classification.",
+              "id": "llm_chat",
+              "name": "LLM chat",
+              "tags": [
+                "llm",
+                "chat",
+                "summarization",
+                "capability"
+              ]
+            }
+          ],
+          "status": "available",
+          "url": "https://api-production-bc748.up.railway.app/a2a",
+          "version": "1.0.0"
+        }
+      }
+    },
+    {
+      "name": "a2a:list_supported_payment_methods",
+      "at": "2026-07-17T18:49:16.769Z",
+      "request": {
+        "url": "https://api-production-bc748.up.railway.app/a2a",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer ***"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": "agentqa-1784314156190-257180ab5c137",
+          "skill": "list_supported_payment_methods",
+          "arguments": {}
+        }
+      },
+      "response": {
+        "status": 200,
+        "latency_ms": 578,
+        "body": {
+          "id": "agentqa-1784314156190-257180ab5c137",
+          "jsonrpc": "2.0",
+          "result": {
+            "payment_methods": [
+              {
+                "create_skill": "pay_pix_with_usdt",
+                "fee_bps": 1000,
+                "funding_asset": "USDT",
+                "funding_network": "BSC",
+                "type": "pix"
+              },
+              {
+                "create_skill": "pay_card_bill_with_usdt",
+                "fee_bps": 1900,
+                "funding_asset": "USDT",
+                "funding_network": "BSC",
+                "type": "credit_card"
+              }
+            ],
+            "quote_skill": "quote_required_usdt",
+            "rest": {
+              "create": "https://api-production-bc748.up.railway.app/agent/v1/pay",
+              "status": "https://api-production-bc748.up.railway.app/agent/v1/pay/{id}"
+            },
+            "status_skill": "get_payment_status"
+          },
+          "skill": "list_supported_payment_methods",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "a2a:quote_required_usdt",
+      "at": "2026-07-17T18:49:17.270Z",
+      "request": {
+        "url": "https://api-production-bc748.up.railway.app/a2a",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer ***"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": "agentqa-1784314156769-f9f3763ac8fc9",
+          "skill": "quote_required_usdt",
+          "arguments": {
+            "type": "pix",
+            "amount_brl": "10.00",
+            "agent_wallet": "0x830000000000000000000000000000000000019a"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "latency_ms": 500,
+        "body": {
+          "id": "agentqa-1784314156769-f9f3763ac8fc9",
+          "jsonrpc": "2.0",
+          "result": {
+            "amount_brl": "10.00",
+            "fee_bps": 1000,
+            "fee_usdt": "0.195313",
+            "funding_asset": "USDT",
+            "funding_network": "BSC",
+            "gross_usdt": "1.953125",
+            "payment_type": "pix",
+            "required_usdt": "2.148438",
+            "usdt_rate": "5.1200"
+          },
+          "skill": "quote_required_usdt",
+          "status": "completed"
+        }
+      }
+    },
+    {
+      "name": "a2a:pay_pix_with_usdt",
+      "at": "2026-07-17T18:49:18.056Z",
+      "request": {
+        "url": "https://api-production-bc748.up.railway.app/a2a",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer ***"
+        },
+        "body": {
+          "jsonrpc": "2.0",
+          "id": "agentqa-1784314157270-e7507a77a5c53",
+          "skill": "pay_pix_with_usdt",
+          "arguments": {
+            "amount_brl": "10.00",
+            "pix_key": "+5511999999999",
+            "beneficiary_name": "ChainFX Agent QA",
+            "idempotency_key": "agentqa-1784314157270",
+            "agent_wallet": "0x830000000000000000000000000000000000019a"
+          }
+        }
+      },
+      "response": {
+        "status": 403,
+        "latency_ms": 785,
+        "body": {
+          "error": {
+            "code": "AGENT_POLICY_REQUIRED",
+            "error": "Agent policy is required for this operation.",
+            "message": "Agent policy is required for this operation.",
+            "requestId": "deae073b-cb0a-404b-8fb0-6417b93f3880"
+          },
+          "id": "agentqa-1784314157270-e7507a77a5c53",
+          "jsonrpc": "2.0",
+          "status": "failed",
+          "status_code": 403
+        }
+      }
+    }
+  ],
+  "completed": false,
+  "a2a_url": "https://api-production-bc748.up.railway.app/a2a",
+  "discovered_skill_count": 10,
+  "discovered_skills": [
+    "pay_pix_with_usdt",
+    "pay_card_bill_with_usdt",
+    "get_payment_status",
+    "quote_required_usdt",
+    "list_supported_payment_methods",
+    "stablecoin_exchange",
+    "capability_exchange",
+    "semantic_memory",
+    "document_ocr",
+    "llm_chat"
+  ],
+  "failed_at": "pay_pix_with_usdt",
+  "error": {
+    "message": "Payment intent creation failed with HTTP 403"
+  },
+  "finished_at": "2026-07-17T18:49:18.057Z"
+}
