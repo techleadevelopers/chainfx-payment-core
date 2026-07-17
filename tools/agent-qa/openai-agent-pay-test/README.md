@@ -4,6 +4,8 @@ External QA harness for Agent Pay interoperability. It receives only the public 
 
 It does not call internal REST, MCP, or backend-private routes directly.
 
+Its purpose is to behave like a real economic agent before ChainFX depends on third-party agents. A passing report means an external agent can discover ChainFX, verify identity, understand policy prerequisites, plan the capability/payment sequence and execute through A2A/x402 without private documentation.
+
 Trust checks covered:
 
 - JWKS discovery.
