@@ -158,6 +158,8 @@ func (s *Server) oasfRecordPayload(base string) map[string]any {
 			"capabilities": base + "/marketplace/capabilities",
 			"policy":       base + "/.well-known/agent-policy.json",
 			"graph":        base + "/.well-known/capability-graph.json",
+			"compositions": base + "/.well-known/capability-compositions.json",
+			"planner":      base + "/agent/v1/plans",
 		},
 		"skills": []map[string]any{
 			{"id": "pay_pix_with_usdt", "category": "payments", "protocols": []string{"a2a"}, "assets": []string{"USDT"}, "networks": []string{"BSC"}, "countries": []string{"BR"}},
@@ -186,6 +188,8 @@ func (s *Server) oasfRecordPayload(base string) map[string]any {
 		"planning": map[string]any{
 			"policy_discovery": base + "/.well-known/agent-policy.json",
 			"capability_graph": base + "/.well-known/capability-graph.json",
+			"compositions":     base + "/.well-known/capability-compositions.json",
+			"planner_api":      base + "/agent/v1/plans",
 			"semantic_aliases": []string{"pay pix", "quote usdt", "stablecoin swap", "ocr", "llm chat", "semantic memory", "pay-per-call api"},
 		},
 		"economics": map[string]any{
