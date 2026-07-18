@@ -1,6 +1,6 @@
 # ChainFX NFC Closed-Loop Rail
 
-Este pacote implementa a parte backend/protocolo do pagamento NFC fechado da ChainFX. O app Android HCE fica no projeto `C:\Users\Paulo\Desktop\nfcemv-emulator` e foi adaptado para transmitir token ChainFX, nao PAN/Track2.
+Este pacote implementa a parte Go do pagamento NFC fechado da ChainFX: token, protocolo APDU/TLV, simulador HCE de protocolo, client de terminal, endpoints e persistencia. Ele nao implementa o `HostApduService` nativo do Android, porque HCE e uma API do sistema operacional mobile.
 
 ## O que foi implementado
 
@@ -11,6 +11,7 @@ Este pacote implementa a parte backend/protocolo do pagamento NFC fechado da Cha
 - Ledger NFC simples com `available_usdt_micro` e `locked_usdt_micro`.
 - Hold de USDT ao aprovar uma transacao.
 - Protocolo APDU/TLV proprietario para leitor ChainFX.
+- Emulador HCE de protocolo em Go (`CardEmulator`) para testes e simulacao.
 - Client tipado para terminal chamar `/api/nfc/authorize`.
 - Endpoints mobile para cartao digital HCE:
   - `GET /api/mobile/nfc/card`.
@@ -20,11 +21,12 @@ Este pacote implementa a parte backend/protocolo do pagamento NFC fechado da Cha
   - `51`: saldo insuficiente.
   - `05`: recusado.
 
-## O que nao foi implementado ainda
+## Limites fora do backend Go
 
+- O `HostApduService` Android real. Isso pertence ao app mobile nativo Android/Kotlin/Java.
+- HCE iOS em producao. Isso pertence ao app iOS/Swift e depende de suporte/entitlements da Apple.
 - Integracao com POS Visa/Mastercard/adquirente.
 - Certificacao EMVCo, PCI DSS, BIN sponsor ou issuer processor.
-- HCE iOS em producao. No iOS, HCE de pagamento depende de recursos/entitlements e regras da Apple.
 
 Este trilho e closed-loop: funciona com app ChainFX + leitor/terminal ChainFX. Um POS comum de adquirente nao vai rotear automaticamente para `/api/nfc/authorize`.
 
@@ -32,7 +34,7 @@ Este trilho e closed-loop: funciona com app ChainFX + leitor/terminal ChainFX. U
 
 1. O app autenticado chama `POST /api/mobile/nfc/provision` usando JWT mobile.
 2. O backend emite token HMAC com TTL curto, por padrao 120 segundos.
-3. O app Android HCE responde ao APDU do terminal com esse token opaco.
+3. O app mobile nativo responde ao APDU do terminal com esse token opaco.
 4. O terminal ChainFX envia o token para `POST /api/nfc/authorize`.
 5. O backend verifica assinatura, expiracao, token persistido e idempotencia.
 6. O backend calcula o USDT necessario usando a cotacao `USDT/BRL`.
@@ -214,20 +216,27 @@ NFC_MAX_AMOUNT_BRL=500
 
 Em producao, `NFC_TOKEN_SECRET` e obrigatorio quando `NFC_ENABLED=true`.
 
-## Integracao Android HCE
+## Protocolo HCE em Go
 
-O projeto `nfcemv-emulator` ja tem os pontos certos:
+O Go implementa o contrato APDU/TLV e um emulador de protocolo para testes. Isso nao substitui o `HostApduService` Android; serve para validar a conversa entre cartao digital e terminal sem depender de aparelho fisico.
 
-- `CardApduService.java`: recebe APDU.
-- `apduservice.xml`: registra AIDs.
-- `ApduUtils.java`: helpers de HEX/APDU.
+Funcoes principais:
 
-Implementacao aplicada no laboratorio Android:
+- `NewCardEmulator(token string)`: cria um cartao digital fechado em memoria.
+- `CardEmulator.SelectCommand()`: gera o SELECT AID esperado pelo leitor.
+- `CardEmulator.ProcessCommandAPDU(apdu []byte)`: processa SELECT, GPO, READ RECORD e GET DATA.
+- `BuildTokenResponse(token string)`: gera resposta APDU `70 + DF01 + 9000`.
+- `ParseTokenResponse(apdu []byte)`: extrai token `nfc1...` no leitor/terminal.
+- `TerminalClient.Authorize(ctx, req)`: chama `/api/nfc/authorize` com timeout padrao de 1500 ms.
 
-1. Antes da aproximacao, app chama `/api/mobile/nfc/provision`.
-2. App guarda o token em `HceTokenStore`, com expiracao.
-3. `CardApduService.processCommandApdu` responde ao leitor com esse token em TLV proprietario.
-4. Leitor ChainFX extrai o token e chama `/api/nfc/authorize`.
+Fluxo de simulacao em Go:
+
+1. Provisionar token por `/api/mobile/nfc/provision` ou `/api/nfc/provision`.
+2. Criar `card := nfc.NewCardEmulator(token)`.
+3. Terminal envia `card.SelectCommand()`.
+4. Terminal envia `GET DATA` ou `READ RECORD`.
+5. Terminal extrai token com `ParseTokenResponse`.
+6. Terminal autoriza com `TerminalClient.Authorize`.
 
 Nao usar PAN real, CVV, Track2 real ou dados de bandeira nesse fluxo.
 
@@ -239,7 +248,7 @@ O AID fechado da ChainFX e:
 F222222222
 ```
 
-O app Android registra esse AID com `android:category="other"` e `android:requireDeviceUnlock="true"`.
+O app mobile nativo deve registrar esse AID como closed-loop/non-card-network. No Android isso fica no HCE nativo; no backend Go isso fica representado por `ChainFXAIDHex`.
 
 SELECT esperado:
 
@@ -267,12 +276,6 @@ Sem token provisionado ou token expirado:
 ```text
 6985
 ```
-
-Funcoes Go do protocolo:
-
-- `BuildTokenResponse(token string) ([]byte, error)`: gera resposta APDU `70 + DF01 + 9000`.
-- `ParseTokenResponse(apdu []byte) (string, error)`: extrai token `nfc1...` no leitor/terminal.
-- `TerminalClient.Authorize(ctx, req)`: chama `/api/nfc/authorize` com timeout padrao de 1500 ms.
 
 Funcoes Go do token:
 
