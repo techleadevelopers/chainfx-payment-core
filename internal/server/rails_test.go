@@ -101,7 +101,7 @@ func TestCORSPreflightAllowsTraceHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/readyz", nil)
 	req.Header.Set("Origin", "https://chatgpt.com")
 	req.Header.Set("Access-Control-Request-Method", "GET")
-	req.Header.Set("Access-Control-Request-Headers", "X-Request-Id, X-Correlation-Id, X-Trace-Id")
+	req.Header.Set("Access-Control-Request-Headers", "X-Request-Id, X-Correlation-Id, X-Trace-Id, PAYMENT")
 	rec := httptest.NewRecorder()
 
 	cors(cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,9 +115,15 @@ func TestCORSPreflightAllowsTraceHeaders(t *testing.T) {
 		t.Fatalf("expected allowed origin to be reflected, got %q", got)
 	}
 	allowHeaders := rec.Header().Get("Access-Control-Allow-Headers")
-	for _, header := range []string{"X-Request-Id", "X-Correlation-Id", "X-Trace-Id"} {
+	for _, header := range []string{"X-Request-Id", "X-Correlation-Id", "X-Trace-Id", "PAYMENT"} {
 		if !strings.Contains(allowHeaders, header) {
 			t.Fatalf("expected %s in Access-Control-Allow-Headers, got %q", header, allowHeaders)
+		}
+	}
+	exposeHeaders := rec.Header().Get("Access-Control-Expose-Headers")
+	for _, header := range []string{"X-Payment-Required", "PAYMENT-RESPONSE"} {
+		if !strings.Contains(exposeHeaders, header) {
+			t.Fatalf("expected %s in Access-Control-Expose-Headers, got %q", header, exposeHeaders)
 		}
 	}
 }
