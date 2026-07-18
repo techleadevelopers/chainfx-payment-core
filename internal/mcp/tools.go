@@ -334,6 +334,14 @@ func (s *Server) handleToolsCallWithAuthorize(authorize Authorize) http.HandlerF
 		if err != nil {
 			s.recordMCPToolLog(r, req.Name, "error", err.Error(), time.Since(start))
 			metrics.IncMCPToolCall("error")
+			if paymentErr, ok := err.(*database.AgentCreditPaymentRequiredError); ok {
+				writeJSON(w, http.StatusPaymentRequired, map[string]any{
+					"isError": true,
+					"error":   paymentErr.Challenge(),
+					"content": []map[string]any{{"type": "json", "json": paymentErr.Challenge()}},
+				})
+				return
+			}
 			writeJSON(w, http.StatusOK, map[string]any{
 				"isError": true,
 				"content": []map[string]any{{"type": "text", "text": err.Error()}},
@@ -360,6 +368,7 @@ func isPublicMCPTool(name string) bool {
 		"chooseRoute",
 		"listAssets",
 		"quote",
+		"executeCapability",
 		"trade",
 		"dryRunCapability",
 		"list_webhook_events":
@@ -922,17 +931,19 @@ func (s *Server) toolGetPurchase(ctx context.Context, args map[string]any) (any,
 func (s *Server) toolExecuteCapability(ctx context.Context, args map[string]any) (any, error) {
 	capability := firstNonEmptyMCP(stringArg(args, "capability"), stringArg(args, "id"))
 	token := firstNonEmptyMCP(stringArg(args, "accessToken"), stringArg(args, "token"))
+	agentWallet := strings.ToLower(strings.TrimSpace(firstNonEmptyMCP(stringArg(args, "agentWallet"), stringArg(args, "wallet"))))
 	requestID := strings.TrimSpace(stringArg(args, "requestId"))
 	idempotencyKey := strings.TrimSpace(stringArg(args, "idempotencyKey"))
-	if capability == "" || token == "" || requestID == "" || idempotencyKey == "" {
-		return nil, fmt.Errorf("capability, accessToken, requestId e idempotencyKey sao obrigatorios")
+	if capability == "" || requestID == "" || idempotencyKey == "" || (token == "" && agentWallet == "") {
+		return nil, fmt.Errorf("capability, requestId, idempotencyKey e accessToken ou agentWallet sao obrigatorios")
 	}
 	rawInput, _ := json.Marshal(args["input"])
 	if args["input"] == nil {
 		rawInput = json.RawMessage(`{}`)
 	}
-	result, err := s.db.ExecuteMarketplaceCapabilityMock(ctx, database.MarketplaceCapabilityExecuteInput{
+	in := database.MarketplaceCapabilityExecuteInput{
 		Token:             token,
+		AgentWallet:       agentWallet,
 		CapabilityID:      capability,
 		Operation:         stringArg(args, "operation"),
 		RequestID:         requestID,
@@ -945,6 +956,32 @@ func (s *Server) toolExecuteCapability(ctx context.Context, args map[string]any)
 		RequireReal:       boolArg(args, "requireReal"),
 		Units:             intArg(args, "units"),
 		Input:             rawInput,
+	}
+	if token == "" {
+		result, err := s.db.ExecuteMarketplaceCapabilityWithRiskCredit(ctx, in)
+		if err != nil {
+			return nil, err
+		}
+		if !result.Duplicate {
+			s.promoteRealCapabilityExecution(ctx, result.Event)
+		}
+		return result, nil
+	}
+	result, err := s.db.ExecuteMarketplaceCapabilityMock(ctx, database.MarketplaceCapabilityExecuteInput{
+		Token:             in.Token,
+		AgentWallet:       in.AgentWallet,
+		CapabilityID:      in.CapabilityID,
+		Operation:         in.Operation,
+		RequestID:         in.RequestID,
+		IdempotencyKey:    in.IdempotencyKey,
+		RequestedProvider: in.RequestedProvider,
+		RoutingMode:       in.RoutingMode,
+		Region:            in.Region,
+		MaxLatencyMS:      in.MaxLatencyMS,
+		MaxCostScore:      in.MaxCostScore,
+		RequireReal:       in.RequireReal,
+		Units:             in.Units,
+		Input:             in.Input,
 	})
 	if err != nil {
 		return nil, err
