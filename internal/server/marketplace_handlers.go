@@ -20,7 +20,7 @@ const marketplacePurchaseTTL = 15 * time.Minute
 
 func (s *Server) handleMarketplaceProducts(w http.ResponseWriter, r *http.Request) {
 	cacheKey := "marketplace-products:" + r.URL.RawQuery
-	s.writeCachedDiscoveryJSON(w, r, cacheKey, time.Minute, func() (any, error) {
+	s.writeCachedDiscoveryJSON(w, r, cacheKey, 5*time.Minute, func() (any, error) {
 		products, err := s.db.ListMarketplaceProducts(r.Context(), database.MarketplaceProductFilters{
 			Category:     r.URL.Query().Get("category"),
 			Provider:     r.URL.Query().Get("provider"),
@@ -37,7 +37,7 @@ func (s *Server) handleMarketplaceProducts(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleMarketplaceCapabilities(w http.ResponseWriter, r *http.Request) {
 	cacheKey := "marketplace-capabilities:" + r.URL.RawQuery
-	s.writeCachedDiscoveryJSON(w, r, cacheKey, time.Minute, func() (any, error) {
+	s.writeCachedDiscoveryJSON(w, r, cacheKey, 5*time.Minute, func() (any, error) {
 		capabilities, err := s.db.ListMarketplaceCapabilities(r.Context(), database.MarketplaceProductFilters{
 			Category:     r.URL.Query().Get("category"),
 			Capability:   r.URL.Query().Get("capability"),
@@ -65,7 +65,7 @@ func (s *Server) handleMarketplaceCapabilities(w http.ResponseWriter, r *http.Re
 func (s *Server) handleMarketplaceCapability(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	cacheKey := "marketplace-capability:" + strings.ToLower(id)
-	s.writeCachedDiscoveryJSON(w, r, cacheKey, time.Minute, func() (any, error) {
+	s.writeCachedDiscoveryJSON(w, r, cacheKey, 5*time.Minute, func() (any, error) {
 		capability, err := s.db.GetMarketplaceCapability(r.Context(), id)
 		if err != nil {
 			return nil, err
@@ -81,7 +81,7 @@ func (s *Server) handleMarketplaceCapabilityContract(w http.ResponseWriter, r *h
 	id := strings.TrimSpace(r.PathValue("id"))
 	version := r.URL.Query().Get("version")
 	cacheKey := "marketplace-capability-contract:" + strings.ToLower(id) + ":" + strings.ToLower(firstNonEmpty(version, "v1"))
-	s.writeCachedDiscoveryJSON(w, r, cacheKey, time.Minute, func() (any, error) {
+	s.writeCachedDiscoveryJSON(w, r, cacheKey, 5*time.Minute, func() (any, error) {
 		contract, err := s.db.GetMarketplaceCapabilityContract(r.Context(), id, version)
 		if err != nil {
 			return nil, err
@@ -97,7 +97,7 @@ func (s *Server) handleAgentCapabilityContract(w http.ResponseWriter, r *http.Re
 	capability := strings.TrimSpace(r.PathValue("capability"))
 	version := r.URL.Query().Get("version")
 	cacheKey := "agent-capability-contract:" + strings.ToLower(capability) + ":" + strings.ToLower(firstNonEmpty(version, "v1"))
-	s.writeCachedDiscoveryJSON(w, r, cacheKey, time.Minute, func() (any, error) {
+	s.writeCachedDiscoveryJSON(w, r, cacheKey, 5*time.Minute, func() (any, error) {
 		contract, err := s.db.GetMarketplaceCapabilityContract(r.Context(), capability, version)
 		if err != nil {
 			return nil, err
