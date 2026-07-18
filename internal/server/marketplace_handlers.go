@@ -198,6 +198,10 @@ func (s *Server) handleMarketplacePurchaseCreate(w http.ResponseWriter, r *http.
 		ExpiresAt:       time.Now().UTC().Add(marketplacePurchaseTTL),
 	})
 	if err != nil {
+		if paymentErr, ok := err.(*database.AgentCreditPaymentRequiredError); ok {
+			writeJSON(w, http.StatusPaymentRequired, paymentErr.Challenge())
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
@@ -283,6 +287,10 @@ func (s *Server) handleMarketplaceCapabilityPurchase(w http.ResponseWriter, r *h
 		ExpiresAt:       time.Now().UTC().Add(marketplacePurchaseTTL),
 	})
 	if err != nil {
+		if paymentErr, ok := err.(*database.AgentCreditPaymentRequiredError); ok {
+			writeJSON(w, http.StatusPaymentRequired, paymentErr.Challenge())
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
