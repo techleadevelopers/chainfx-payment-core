@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -87,6 +88,50 @@ type MarketplaceUsageSummary struct {
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
+type AgentDiscoveryAnalytics struct {
+	Window                string               `json:"window"`
+	GeneratedAt           time.Time            `json:"generatedAt"`
+	DiscoveryRequests     int                  `json:"discoveryRequests"`
+	EstimatedUniqueScouts int                  `json:"estimatedUniqueScouts"`
+	AuthenticatedCallers  int                  `json:"authenticatedCallers"`
+	MCPToolCalls          int                  `json:"mcpToolCalls"`
+	MCPToolErrors         int                  `json:"mcpToolErrors"`
+	A2ACalls              int                  `json:"a2aCalls"`
+	ConnectedAgents       int                  `json:"connectedAgents"`
+	PaymentIntents        int                  `json:"paymentIntents"`
+	PayingAgentWallets    int                  `json:"payingAgentWallets"`
+	MarketplacePurchases  int                  `json:"marketplacePurchases"`
+	CapabilityExecutions  int                  `json:"capabilityExecutions"`
+	DiscoveryToActionRate string               `json:"discoveryToActionRate"`
+	TopDiscoveryEndpoints []AgentEndpointStat  `json:"topDiscoveryEndpoints"`
+	TopAgentUserAgents    []AgentUserAgentStat `json:"topAgentUserAgents"`
+	TopMCPTools           []AgentMCPToolStat   `json:"topMcpTools"`
+	Funnel                map[string]int       `json:"funnel"`
+	Notes                 []string             `json:"notes"`
+}
+
+type AgentEndpointStat struct {
+	Path     string    `json:"path"`
+	Count    int       `json:"count"`
+	Unique   int       `json:"unique"`
+	LastSeen time.Time `json:"lastSeen"`
+}
+
+type AgentUserAgentStat struct {
+	UserAgent string    `json:"userAgent"`
+	Count     int       `json:"count"`
+	UniqueIPs int       `json:"uniqueIps"`
+	LastSeen  time.Time `json:"lastSeen"`
+}
+
+type AgentMCPToolStat struct {
+	ToolName string    `json:"toolName"`
+	Count    int       `json:"count"`
+	Errors   int       `json:"errors"`
+	AvgMS    int       `json:"avgMs"`
+	LastSeen time.Time `json:"lastSeen"`
+}
+
 type DeveloperDashboardSummary struct {
 	GeneratedAt time.Time                     `json:"generatedAt"`
 	Counts      map[string]int                `json:"counts"`
@@ -96,6 +141,7 @@ type DeveloperDashboardSummary struct {
 	Purchases   []*MarketplacePurchaseSummary `json:"purchases"`
 	Usage       []*MarketplaceUsageSummary    `json:"usage"`
 	Webhooks    *WebhookDeliveryStats         `json:"webhooks,omitempty"`
+	AgentFunnel *AgentDiscoveryAnalytics      `json:"agentFunnel,omitempty"`
 }
 
 func (db *DB) RecordAPIRequestLog(ctx context.Context, in APIRequestLogInput) error {
@@ -152,6 +198,7 @@ func (db *DB) DeveloperDashboard(ctx context.Context, limit int) (*DeveloperDash
 		return nil, err
 	}
 	webhookStats, _ := db.WebhookDashboardStats(ctx)
+	agentFunnel, _ := db.AgentDiscoveryAnalytics(ctx)
 	counts, err := db.developerDashboardCounts(ctx)
 	if err != nil {
 		return nil, err
@@ -164,12 +211,179 @@ func (db *DB) DeveloperDashboard(ctx context.Context, limit int) (*DeveloperDash
 			"mcpToolLogging":    true,
 			"payloadStorage":    "redacted",
 		},
-		APILogs:   apiLogs,
-		MCPLogs:   mcpLogs,
-		Purchases: purchases,
-		Usage:     usage,
-		Webhooks:  webhookStats,
+		APILogs:     apiLogs,
+		MCPLogs:     mcpLogs,
+		Purchases:   purchases,
+		Usage:       usage,
+		Webhooks:    webhookStats,
+		AgentFunnel: agentFunnel,
 	}, nil
+}
+
+func (db *DB) AgentDiscoveryAnalytics(ctx context.Context) (*AgentDiscoveryAnalytics, error) {
+	if db == nil || db.SQL == nil {
+		return nil, nil
+	}
+	const window = "24h"
+	out := &AgentDiscoveryAnalytics{
+		Window:      window,
+		GeneratedAt: time.Now().UTC(),
+		Notes: []string{
+			"estimatedUniqueScouts deduplicates by API key hash when present, otherwise by client IP plus User-Agent.",
+			"Authenticated callers and connected/paying wallets are stronger signals of real agents than anonymous discovery hits.",
+			"Browser, curl and generic synthetic clients can still appear in discovery counts until callers send an explicit agent identity header.",
+		},
+	}
+	scalarQueries := map[*int]string{
+		&out.DiscoveryRequests: `SELECT COUNT(*) FROM api_request_logs WHERE created_at > now() - interval '24 hours' AND (
+			route_class IN ('public_discovery','discovery') OR path IN ('/agent-pay.json','/mcp/capabilities.json') OR path LIKE '/.well-known/%'
+		)`,
+		&out.EstimatedUniqueScouts: `SELECT COUNT(DISTINCT COALESCE(NULLIF(api_key_hash,''), 'anon:' || COALESCE(client_ip,'') || ':' || COALESCE(user_agent,''))) FROM api_request_logs WHERE created_at > now() - interval '24 hours' AND (
+			route_class IN ('public_discovery','discovery') OR path IN ('/agent-pay.json','/mcp/capabilities.json') OR path LIKE '/.well-known/%'
+		)`,
+		&out.AuthenticatedCallers: `SELECT COUNT(DISTINCT api_key_hash) FROM api_request_logs WHERE created_at > now() - interval '24 hours' AND COALESCE(api_key_hash,'') <> '' AND (
+			path LIKE '/mcp/%' OR path LIKE '/agent/%' OR path LIKE '/a2a%' OR path LIKE '/marketplace/%' OR path LIKE '/x402/%'
+		)`,
+		&out.MCPToolCalls:         `SELECT COUNT(*) FROM mcp_tool_logs WHERE created_at > now() - interval '24 hours'`,
+		&out.MCPToolErrors:        `SELECT COUNT(*) FROM mcp_tool_logs WHERE created_at > now() - interval '24 hours' AND status <> 'ok'`,
+		&out.A2ACalls:             `SELECT COUNT(*) FROM api_request_logs WHERE created_at > now() - interval '24 hours' AND path LIKE '/a2a%'`,
+		&out.ConnectedAgents:      `SELECT COUNT(*) FROM marketplace_agent_identities WHERE created_at > now() - interval '24 hours'`,
+		&out.PaymentIntents:       `SELECT COUNT(*) FROM agent_payment_intents WHERE created_at > now() - interval '24 hours'`,
+		&out.PayingAgentWallets:   `SELECT COUNT(DISTINCT lower(agent_wallet)) FROM agent_payment_intents WHERE created_at > now() - interval '24 hours'`,
+		&out.MarketplacePurchases: `SELECT COUNT(*) FROM marketplace_purchases WHERE created_at > now() - interval '24 hours'`,
+		&out.CapabilityExecutions: `SELECT COUNT(*) FROM marketplace_execution_events WHERE created_at > now() - interval '24 hours'`,
+	}
+	for dest, query := range scalarQueries {
+		if err := db.SQL.QueryRowContext(ctx, query).Scan(dest); err != nil {
+			return nil, err
+		}
+	}
+	actions := out.A2ACalls + out.PaymentIntents + out.MarketplacePurchases + out.CapabilityExecutions
+	if out.EstimatedUniqueScouts > 0 {
+		out.DiscoveryToActionRate = formatPercent(float64(actions) / float64(out.EstimatedUniqueScouts))
+	} else {
+		out.DiscoveryToActionRate = "0.00%"
+	}
+	out.Funnel = map[string]int{
+		"discoveryRequests":     out.DiscoveryRequests,
+		"estimatedUniqueScouts": out.EstimatedUniqueScouts,
+		"authenticatedCallers":  out.AuthenticatedCallers,
+		"connectedAgents":       out.ConnectedAgents,
+		"mcpToolCalls":          out.MCPToolCalls,
+		"a2aCalls":              out.A2ACalls,
+		"paymentIntents":        out.PaymentIntents,
+		"marketplacePurchases":  out.MarketplacePurchases,
+		"capabilityExecutions":  out.CapabilityExecutions,
+	}
+	endpoints, err := db.ListTopAgentDiscoveryEndpoints(ctx, 10)
+	if err != nil {
+		return nil, err
+	}
+	out.TopDiscoveryEndpoints = endpoints
+	userAgents, err := db.ListTopAgentUserAgents(ctx, 10)
+	if err != nil {
+		return nil, err
+	}
+	out.TopAgentUserAgents = userAgents
+	tools, err := db.ListTopAgentMCPTools(ctx, 10)
+	if err != nil {
+		return nil, err
+	}
+	out.TopMCPTools = tools
+	return out, nil
+}
+
+func (db *DB) ListTopAgentDiscoveryEndpoints(ctx context.Context, limit int) ([]AgentEndpointStat, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := db.SQL.QueryContext(ctx, `
+		SELECT path, COUNT(*)::int,
+		       COUNT(DISTINCT COALESCE(NULLIF(api_key_hash,''), 'anon:' || COALESCE(client_ip,'') || ':' || COALESCE(user_agent,'')))::int,
+		       MAX(created_at)
+		FROM api_request_logs
+		WHERE created_at > now() - interval '24 hours'
+		  AND (route_class IN ('public_discovery','discovery') OR path IN ('/agent-pay.json','/mcp/capabilities.json') OR path LIKE '/.well-known/%')
+		GROUP BY path
+		ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AgentEndpointStat{}
+	for rows.Next() {
+		var item AgentEndpointStat
+		if err := rows.Scan(&item.Path, &item.Count, &item.Unique, &item.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) ListTopAgentUserAgents(ctx context.Context, limit int) ([]AgentUserAgentStat, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := db.SQL.QueryContext(ctx, `
+		SELECT COALESCE(NULLIF(user_agent,''), 'unknown') AS user_agent,
+		       COUNT(*)::int,
+		       COUNT(DISTINCT COALESCE(client_ip,''))::int,
+		       MAX(created_at)
+		FROM api_request_logs
+		WHERE created_at > now() - interval '24 hours'
+		  AND (path LIKE '/mcp/%' OR path LIKE '/agent/%' OR path LIKE '/a2a%' OR path LIKE '/.well-known/%' OR path = '/agent-pay.json')
+		GROUP BY COALESCE(NULLIF(user_agent,''), 'unknown')
+		ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AgentUserAgentStat{}
+	for rows.Next() {
+		var item AgentUserAgentStat
+		if err := rows.Scan(&item.UserAgent, &item.Count, &item.UniqueIPs, &item.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) ListTopAgentMCPTools(ctx context.Context, limit int) ([]AgentMCPToolStat, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := db.SQL.QueryContext(ctx, `
+		SELECT tool_name,
+		       COUNT(*)::int,
+		       COUNT(*) FILTER (WHERE status <> 'ok')::int,
+		       COALESCE(ROUND(AVG(duration_ms)), 0)::int,
+		       MAX(created_at)
+		FROM mcp_tool_logs
+		WHERE created_at > now() - interval '24 hours'
+		GROUP BY tool_name
+		ORDER BY COUNT(*) DESC, MAX(created_at) DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AgentMCPToolStat{}
+	for rows.Next() {
+		var item AgentMCPToolStat
+		if err := rows.Scan(&item.ToolName, &item.Count, &item.Errors, &item.AvgMS, &item.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.2f%%", value*100)
 }
 
 func (db *DB) developerDashboardCounts(ctx context.Context) (map[string]int, error) {
