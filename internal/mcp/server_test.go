@@ -153,6 +153,45 @@ func TestMCPFinancialToolWithoutKeyStillRequiresTransportAuth(t *testing.T) {
 	}
 }
 
+func TestMCPAIToolWithoutKeyReturnsFallbackAndSkipsTransportAuth(t *testing.T) {
+	s := New(nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", strings.NewReader(`{"name":"market_analysis","arguments":{}}`))
+	rec := httptest.NewRecorder()
+	authorizeCalled := false
+
+	s.handleToolsCallWithAuthorize(func(w http.ResponseWriter, r *http.Request) bool {
+		authorizeCalled = true
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	})(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected anonymous AI fallback to return 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if authorizeCalled {
+		t.Fatal("anonymous AI fallback should not call transport authorizer")
+	}
+	if !strings.Contains(rec.Body.String(), `"source":"fallback"`) {
+		t.Fatalf("expected fallback AI content, got %s", rec.Body.String())
+	}
+}
+
+func TestMCPAIToolWithKeyStillRequiresTransportAuth(t *testing.T) {
+	s := New(nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/mcp/tools/call", strings.NewReader(`{"name":"market_analysis","arguments":{}}`))
+	req.Header.Set("Authorization", "Bearer sk_test_invalid")
+	rec := httptest.NewRecorder()
+
+	s.handleToolsCallWithAuthorize(func(w http.ResponseWriter, r *http.Request) bool {
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	})(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected keyed AI call to require auth, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestMCPAIToolsReturnFallbackWhenProviderUnavailable(t *testing.T) {
 	s := New(nil, nil, nil, nil, nil)
 	got, err := s.callTool(context.Background(), "market_analysis", map[string]any{})
