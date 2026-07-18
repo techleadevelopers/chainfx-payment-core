@@ -233,12 +233,12 @@ func cors(cfg *config.Config, next http.Handler) http.Handler {
 	}
 	allowed := strings.Split(allowedOrigins, ",")
 	allowed = append(allowed, "http://localhost:5173", "http://127.0.0.1:5173", "https://swapped-cryptocurrensy.vercel.app", "https://www.chainfx.store", "https://chainfx.store", "https://chatgpt.com", "https://chat.openai.com", "https://codex.openai.com")
-	allowedHeaders := "Content-Type, Authorization, X-Api-Key, X-Admin-Console-Key, X-Request-Id, X-Correlation-Id, X-Trace-Id, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature"
+	allowedHeaders := "Content-Type, Authorization, PAYMENT, Payment, PAYMENT-SIGNATURE, X-Payment, X-Api-Key, X-Admin-Console-Key, X-Request-Id, X-Correlation-Id, X-Trace-Id, x-internal-hmac, x-idempotency-key, x-efi-signature, x-chainfx-signature"
 	allowedMethods := "GET, POST, PATCH, DELETE, OPTIONS"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		w.Header().Add("Vary", "Origin")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Server-Timing, X-Route-Class, X-MCP-Tool-Class")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After, Server-Timing, X-Route-Class, X-MCP-Tool-Class, X-Payment-Required, PAYMENT-RESPONSE")
 		for _, item := range allowed {
 			item = strings.TrimSpace(item)
 			if item == "" {
