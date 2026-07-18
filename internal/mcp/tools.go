@@ -459,7 +459,36 @@ func (s *Server) recordMCPToolLog(r *http.Request, toolName, status, errorMessag
 		DurationMS:   duration.Milliseconds(),
 		APIKeyHash:   shortMCPSecretHash(apiKey),
 		AuthMode:     authMode,
+		AgentID:      mcpAgentID(r),
+		AgentSigHash: mcpAgentSignatureHash(r),
 	})
+}
+
+func mcpAgentID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	for _, header := range []string{"X-Agent-ID", "X-Agent-Id", "X-Client-Agent", "MCP-Agent-ID"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+			if len(value) > 160 {
+				value = value[:160]
+			}
+			return value
+		}
+	}
+	return ""
+}
+
+func mcpAgentSignatureHash(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	for _, header := range []string{"X-Agent-Signature", "X-Agent-Card-Signature", "MCP-Agent-Signature"} {
+		if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+			return shortMCPSecretHash(value)
+		}
+	}
+	return ""
 }
 
 func mcpAPIKey(r *http.Request) string {
