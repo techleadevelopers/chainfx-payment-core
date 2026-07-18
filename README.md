@@ -130,6 +130,7 @@ Integracoes recentes refletidas no backend:
 - **Hybrid Human + Agent-to-Agent Rail**: o mesmo gateway atende usuarios humanos, web/mobile, consoles administrativos, agentes A2A, clientes MCP, x402 e marketplaces de capability.
 - **Efi PSP Layer**: `internal/psp` com `EfiAdapter`, `Router`, health probe, fallback/restore e parsing de webhooks PIX em lote. `cmd/api/main.go` monta o router quando credenciais/certificado Efi existem.
 - **Efi Credit Card BUY**: `/api/buy` aceita `paymentMethod=credit_card`, `paymentToken`, `customer` e `billingAddress`; `/api/efi/charges/webhook/buy` consulta notificacao Efi e liquida apenas status `paid`.
+- **NFC Closed-Loop Wallet Card**: `/api/mobile/nfc/card` e `/api/mobile/nfc/provision` entregam um cartao digital HCE fechado para o app mobile; `/api/nfc/authorize` autoriza pagamentos de terminal ChainFX com token `nfc1...`, idempotencia e hold de USDT. Isso nao e Visa/Mastercard nem POS de adquirente comum.
 - **Gas Station / Paymaster**: `internal/paymaster` entrega oracle, estimator, idempotency, retry, batcher, token relayer e service top-level. Rotas publicas/admin em `/v1/gas/*`.
 - **AutoSweeper + Paymaster Loop**: `NewWorkerManager(db, cfg, mailer, pool *rpc.Pool)` recebe `rpc.Pool`, inicializa 9 workers e inclui AutoSweeper/Paymaster relay loop.
 - **MCP Capability Network**: `.mcp/server.json`, `/mcp/initialize`, `/mcp/capabilities.json`, `/agent/v1/capabilities` e Agent Pay com `createPaymentIntent`, `getPaymentIntent`, `listAgentPaymentIntents`.
@@ -212,6 +213,7 @@ schema_agent_pricing.sql
 - **Web/Admin**: `admin.html` opera testes, observabilidade, signer probes, Agent QA, developers, MCP, x402, registries e episodes.
 - **Web Developer**: `index.html#developers`, `/developers` e `/app/developer/` focam no fluxo humano/empresa de REST buy/sell, quotes, order status, API keys e webhooks. MCP, Agent Pay, A2A, x402 e capability network ficam separados na superficie Agent/M2M.
 - **Mobile**: endpoints `/api/mobile/*` atendem wallet, orders, PIX, DCA, security, notifications e WebSocket.
+- **Mobile NFC**: endpoints `/api/mobile/nfc/card` e `/api/mobile/nfc/provision` provisionam o token HCE de curta duracao para aproximacao em leitor ChainFX.
 - **REST Core**: buy/sell, rates, order status, PSP, webhooks, gas station, developer projects e API keys.
 - **MCP**: `/mcp/initialize`, `/mcp/tools/list`, `/mcp/tools/call`, `/mcp/resources/list` e `/mcp/resources/read` expõem tools e resources para hosts de agentes.
 - **A2A**: `/.well-known/agent-card.json`, `/a2a` e `/a2a/tasks` expõem skills, task lifecycle e streaming SSE para agentes independentes.
@@ -220,6 +222,69 @@ schema_agent_pricing.sql
 - **Trust Layer**: JWKS, assinatura Ed25519 do Agent Card, reputation, SLA, episodes, policy discovery, Agent Graph v2 e Planner API.
 - **Registries**: MCP Registry, A2A Agent Card, OpenAPI e AGNTCY/OASF-style record mantem discovery externo.
 - **Settlement**: USDT/USDC BSC, PIX/card via PSP, signer isolado, workers, idempotencia, receipts e ledger.
+
+### NFC Closed-Loop Wallet Card
+
+O trilho NFC atual e um cartao digital fechado da ChainFX, desenhado para app mobile + leitor/terminal ChainFX. Ele nao se registra como emissor de bandeira, nao usa PAN real, nao usa CVV e nao tenta capturar POS Visa/Mastercard.
+
+Fluxo de producao:
+
+```text
+Mobile JWT -> POST /api/mobile/nfc/provision
+Android HCE -> APDU SELECT AID F222222222
+Android HCE -> APDU response 70 + DF01(token nfc1...)
+ChainFX Terminal -> POST /api/nfc/authorize
+Go API -> verifica token, idempotencia, saldo NFC e trava USDT
+Terminal <- response_code 00 / 51 / 05
+```
+
+Endpoints:
+
+- `GET /api/mobile/nfc/card`: retorna metadados do cartao digital, AID `F222222222`, rede e saldo NFC.
+- `POST /api/mobile/nfc/provision`: emite token opaco `nfc1...` usando JWT mobile. O app nao carrega API key `sk_live`.
+- `POST /api/nfc/authorize`: usado pelo leitor/terminal ChainFX para autorizar valor BRL.
+- `GET /api/nfc/authorizations/{id}`: consulta da autorizacao.
+- `GET /api/nfc/balance/{wallet}?network=BSC`: saldo NFC disponivel/travado.
+- `POST /api/nfc/sandbox/fund`: credito de teste, apenas com `ALLOW_SIMULATIONS=true`.
+
+Contrato APDU fechado:
+
+```text
+AID: F222222222
+SELECT response: FCI com label ChainFX NFC
+Token response: 70 [ DF02 01 01 ][ DF01 <token UTF-8> ] 9000
+Sem token valido: 6985
+```
+
+Arquivos principais:
+
+- `internal/nfc`: token, protocolo APDU/TLV e client de terminal.
+- `internal/server/nfc_handlers.go`: autorizador backend.
+- `internal/mobile/nfc.go`: provisionamento do cartao digital pelo JWT mobile.
+- `migrations/020_nfc_closed_loop.sql`: tabelas `nfc_tokens`, `nfc_wallet_balances`, `nfc_authorizations`.
+- `C:\Users\Paulo\Desktop\nfcemv-emulator`: laboratorio Android HCE adaptado para token ChainFX fechado.
+
+Variaveis:
+
+```env
+NFC_ENABLED=true
+NFC_TOKEN_SECRET=use-um-segredo-forte
+NFC_TOKEN_TTL_SEC=120
+NFC_HOLD_TTL_SEC=900
+NFC_MAX_AMOUNT_BRL=500
+```
+
+Latencia local medida para `IssueToken + VerifyToken` em `internal/nfc`:
+
+```text
+p50 = 9.973us
+p55 = 9.987us
+p95 = 100.645us
+p99 = 101.557us
+max = 116.765us
+```
+
+Essa medicao cobre somente o custo criptografico local. A latencia real de pagamento depende de Android HCE, leitor, HTTP, Postgres, price worker e rede.
 
 ### Principio de produto
 
