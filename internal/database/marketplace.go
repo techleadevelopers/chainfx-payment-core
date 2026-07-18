@@ -227,7 +227,7 @@ type MarketplaceCapabilityExecuteInput struct {
 type MarketplaceCapabilityExecuteResult struct {
 	Event     *MarketplaceCapabilityExecution `json:"execution"`
 	Grant     *APIAccessGrant                 `json:"grant"`
-	Credit    *AgentCapabilityCreditAccount    `json:"credit,omitempty"`
+	Credit    *AgentCapabilityCreditAccount   `json:"credit,omitempty"`
 	Duplicate bool                            `json:"duplicate"`
 }
 
