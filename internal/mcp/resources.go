@@ -117,7 +117,7 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilities(), nil
 		}
-		value, err := s.cachedValue("resource:marketplace:capabilities", 30*time.Second, func() (any, error) {
+		value, err := s.cachedValue("resource:marketplace:capabilities", mcpCatalogCacheTTL, func() (any, error) {
 			return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
 		})
 		capabilities, _ := value.([]*database.MarketplaceCapability)
@@ -131,7 +131,7 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilityContract(id), nil
 		}
-		value, err := s.cachedValue("resource:capability-contract:"+strings.ToLower(id)+":v1", 30*time.Second, func() (any, error) {
+		value, err := s.cachedValue("resource:capability-contract:"+strings.ToLower(id)+":v1", mcpCatalogCacheTTL, func() (any, error) {
 			return s.db.GetMarketplaceCapabilityContract(ctx, id, "v1")
 		})
 		if err != nil {
@@ -146,7 +146,7 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return map[string]any{"products": []any{}, "source": "fallback"}, nil
 		}
-		return s.cachedValue("resource:marketplace:products", 30*time.Second, func() (any, error) {
+		return s.cachedValue("resource:marketplace:products", mcpCatalogCacheTTL, func() (any, error) {
 			return s.db.ListMarketplaceProducts(ctx, database.MarketplaceProductFilters{})
 		})
 	case uri == "chainfx://agent/assets":
@@ -178,7 +178,7 @@ func (s *Server) readResource(ctx context.Context, uri string) (any, error) {
 		if s.db == nil {
 			return fallbackCapabilities(), nil
 		}
-		return s.cachedValue("resource:mcp:registry", 30*time.Second, func() (any, error) {
+		return s.cachedValue("resource:mcp:registry", mcpCatalogCacheTTL, func() (any, error) {
 			return s.db.ListMarketplaceCapabilities(ctx, database.MarketplaceProductFilters{})
 		})
 	default:
