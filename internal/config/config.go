@@ -397,6 +397,7 @@ func (c *Config) ValidateProduction() error {
 	}
 	if c.NFCEnabled {
 		required["NFC_TOKEN_SECRET"] = c.NFCTokenSecret
+		required["NFC_TERMINALS"] = c.NFCTerminals
 	}
 	if strings.TrimSpace(c.EfiCertificatePath) == "" && strings.TrimSpace(c.EfiCertificateP12) == "" {
 		required["EFI_CERTIFICATE_PATH or EFI_CERTIFICATE_P12_BASE64"] = ""
