@@ -23,6 +23,16 @@ go test ./internal/server ./internal/mcp ./internal/workers ./internal/database 
 k6 run tests/paymaster_stress.js -e BASE_URL=https://api.chainfx.store -e API_KEY_LIVE=sk_live_... -e API_KEY_TEST=sk_test_...
 ```
 
+Suite RPA cloud nao destrutiva:
+
+```powershell
+cd C:\Users\Paulo\Desktop\payment-gateway
+$env:SECURITY_RPA_BASE_URL="https://api-production-bc748.up.railway.app"
+node tests\security_cloud_adversarial.js
+```
+
+Cobertura: superficie publica, rotas protegidas, JWT invalido, enumeracao de login, CORS, headers, SQLi/XSS/path traversal, webhooks invalidos, rotas internas HMAC, replay invalido e latencia p50/p55/p75/p90/p95/p99. Flood leve fica desligado por padrao e exige `SECURITY_RPA_RATE_LIMIT_COUNT`.
+
 ---
 
 ## Ãndice de Criticidade
