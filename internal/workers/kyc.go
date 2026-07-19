@@ -77,7 +77,7 @@ func (w *KYCWorker) processRequest(ctx context.Context, id string, metadata map[
 	req.DeviceFingerprint = stringFromAny(metadata["device_fingerprint"])
 
 	secret := w.biometrySecret()
-	engine := kycengine.New(secret)
+	engine := kycengine.NewFromEnv(secret)
 	result := engine.Analyze(ctx, req)
 
 	duplicateCount, err := w.countDuplicateFaces(ctx, req.UserID, result.EmbeddingHash)
