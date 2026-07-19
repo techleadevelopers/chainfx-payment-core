@@ -22,3 +22,25 @@ func TestParseTokenResponseRejectsNonSuccess(t *testing.T) {
 		t.Fatal("expected non-success status to fail")
 	}
 }
+
+func TestParseTokenResponseRejectsMalformedTLV(t *testing.T) {
+	cases := [][]byte{
+		nil,
+		{},
+		{0x90, 0x00},
+		{0x70, 0x03, 0xDF, 0x01, 0x10, 0x90, 0x00},
+		{0x70, 0x02, 0xDF, 0x01, 0x90, 0x00},
+		{0x70, 0x03, 0xDF, 0x03, 0x00, 0x90, 0x00},
+	}
+	for _, tc := range cases {
+		if token, err := ParseTokenResponse(tc); err == nil {
+			t.Fatalf("expected malformed APDU to fail, got token %q for %x", token, tc)
+		}
+	}
+}
+
+func TestBuildTokenResponseRejectsEmptyToken(t *testing.T) {
+	if _, err := BuildTokenResponse(""); err == nil {
+		t.Fatal("expected empty token to fail")
+	}
+}
