@@ -51,6 +51,10 @@ const (
 	EventCapabilityPurchased = "capability.purchased"
 	EventCapabilityExecuted  = "capability.executed"
 	EventCapabilityGranted   = "capability.granted"
+
+	// ChainFX Tap closed-loop NFC lifecycle events.
+	EventNFCCaptured = "nfc.capture.completed"
+	EventNFCReversed = "nfc.authorization.reversed"
 )
 
 // AllEvents lists every trigger automation platforms can subscribe to.
@@ -72,6 +76,8 @@ func AllEvents() []string {
 		EventCapabilityPurchased,
 		EventCapabilityExecuted,
 		EventCapabilityGranted,
+		EventNFCCaptured,
+		EventNFCReversed,
 	}
 }
 
@@ -165,6 +171,12 @@ func busEventMapping(eventType string) []string {
 	case "marketplace.capability.executed":
 		return []string{EventCapabilityExecuted}
 
+	// ChainFX Tap closed-loop NFC lifecycle.
+	case "nfc.capture.completed":
+		return []string{EventNFCCaptured, EventPaymentReceived}
+	case "nfc.authorization.reversed":
+		return []string{EventNFCReversed}
+
 	default:
 		return nil
 	}
@@ -190,6 +202,8 @@ func (d *Dispatcher) Start(ctx context.Context, bus *workers.EventBus) {
 		// Capability marketplace lifecycle (new)
 		"marketplace.capability.purchased", "marketplace.capability.granted",
 		"marketplace.capability.executed",
+		// ChainFX Tap closed-loop NFC lifecycle
+		"nfc.capture.completed", "nfc.authorization.reversed",
 	}
 	for _, t := range busTypes {
 		ch := bus.Subscribe(t)
