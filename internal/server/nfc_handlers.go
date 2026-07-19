@@ -102,9 +102,6 @@ func (s *Server) handleNFCAuthorize(w http.ResponseWriter, r *http.Request) {
 	if !s.nfcReady(w) {
 		return
 	}
-	if _, ok := s.authorizeChainFX(w, r); !ok {
-		return
-	}
 	var req nfcAuthorizeRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON payload"})
@@ -120,6 +117,10 @@ func (s *Server) handleNFCAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "token, merchant_id, terminal_id and idempotency_key are required"})
 		return
 	}
+	terminal, ok := s.authorizeNFCTerminal(w, r, req.MerchantID, req.TerminalID)
+	if !ok {
+		return
+	}
 	if req.Currency != "BRL" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "only BRL NFC authorizations are currently supported"})
 		return
@@ -131,6 +132,10 @@ func (s *Server) handleNFCAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.cfg.NFCMaxAmountBRL > 0 && amount.Float64() > s.cfg.NFCMaxAmountBRL {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "amount exceeds NFC_MAX_AMOUNT_BRL", "code": "NFC_AMOUNT_LIMIT"})
+		return
+	}
+	if terminal.MaxAmountBRLMinor > 0 && int64(amount) > terminal.MaxAmountBRLMinor {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "amount exceeds terminal max amount", "code": "NFC_TERMINAL_AMOUNT_LIMIT", "response_code": "61"})
 		return
 	}
 
@@ -171,6 +176,10 @@ func (s *Server) handleNFCAuthorize(w http.ResponseWriter, r *http.Request) {
 		HoldExpiresAt:   time.Now().UTC().Add(time.Duration(s.cfg.NFCHoldTTLSeconds) * time.Second),
 	})
 	if err != nil {
+		if errors.Is(err, database.ErrNFCIdempotencyPayloadMismatch) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "idempotency key replayed with different payload", "code": "NFC_IDEMPOTENCY_PAYLOAD_MISMATCH"})
+			return
+		}
 		writeError(w, err)
 		return
 	}
@@ -186,9 +195,6 @@ func (s *Server) handleNFCGetAuthorization(w http.ResponseWriter, r *http.Reques
 	if !s.nfcReady(w) {
 		return
 	}
-	if _, ok := s.authorizeChainFX(w, r); !ok {
-		return
-	}
 	auth, err := s.db.GetNFCAuthorization(r.Context(), strings.TrimSpace(r.PathValue("id")))
 	if err != nil {
 		writeError(w, err)
@@ -198,6 +204,9 @@ func (s *Server) handleNFCGetAuthorization(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "authorization not found"})
 		return
 	}
+	if _, ok := s.authorizeNFCTerminal(w, r, auth.MerchantID, auth.TerminalID); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, nfcAuthorizationView(auth))
 }
 
@@ -205,10 +214,20 @@ func (s *Server) handleNFCCaptureAuthorization(w http.ResponseWriter, r *http.Re
 	if !s.nfcReady(w) {
 		return
 	}
-	if _, ok := s.authorizeChainFX(w, r); !ok {
+	id := strings.TrimSpace(r.PathValue("id"))
+	current, err := s.db.GetNFCAuthorization(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	auth, err := s.db.CaptureNFCAuthorization(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if current == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "authorization not found"})
+		return
+	}
+	if _, ok := s.authorizeNFCTerminal(w, r, current.MerchantID, current.TerminalID); !ok {
+		return
+	}
+	auth, err := s.db.CaptureNFCAuthorization(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "NFC_CAPTURE_FAILED"})
 		return
@@ -225,10 +244,20 @@ func (s *Server) handleNFCReverseAuthorization(w http.ResponseWriter, r *http.Re
 	if !s.nfcReady(w) {
 		return
 	}
-	if _, ok := s.authorizeChainFX(w, r); !ok {
+	id := strings.TrimSpace(r.PathValue("id"))
+	current, err := s.db.GetNFCAuthorization(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	auth, err := s.db.ReverseNFCAuthorization(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if current == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "authorization not found"})
+		return
+	}
+	if _, ok := s.authorizeNFCTerminal(w, r, current.MerchantID, current.TerminalID); !ok {
+		return
+	}
+	auth, err := s.db.ReverseNFCAuthorization(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "NFC_REVERSAL_FAILED"})
 		return
@@ -322,6 +351,37 @@ func (s *Server) nfcReady(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+func (s *Server) authorizeNFCTerminal(w http.ResponseWriter, r *http.Request, merchantID, terminalID string) (*database.NFCTerminalPolicy, bool) {
+	apiKey := chainFXAPIKeyFromHeader(r)
+	terminal, err := s.db.ValidateNFCTerminal(r.Context(), merchantID, terminalID, apiKey)
+	if err != nil {
+		writeError(w, err)
+		return nil, false
+	}
+	if terminal != nil {
+		if terminal.MerchantStatus != "active" || terminal.TerminalStatus != "active" {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "NFC terminal disabled", "code": "NFC_TERMINAL_DISABLED", "response_code": "57"})
+			return nil, false
+		}
+		return terminal, true
+	}
+	if !s.cfg.IsProduction() {
+		if _, ok := s.authorizeChainFX(w, r); ok {
+			return &database.NFCTerminalPolicy{
+				MerchantID:        strings.TrimSpace(merchantID),
+				TerminalID:        strings.TrimSpace(terminalID),
+				MerchantStatus:    "active",
+				TerminalStatus:    "active",
+				MaxAmountBRLMinor: int64(s.cfg.NFCMaxAmountBRL * 100),
+				RiskPolicyVersion: "development",
+			}, true
+		}
+		return nil, false
+	}
+	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "NFC terminal credential required", "code": "NFC_TERMINAL_AUTH_REQUIRED", "response_code": "05"})
+	return nil, false
 }
 
 func nfcAuthorizationView(a *database.NFCAuthorization) map[string]any {
