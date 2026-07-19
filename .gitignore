@@ -31,6 +31,8 @@ contracts/cache/
 contracts/artifacts/
 contracts/typechain-types/
 contracts/wallets/
+tests/security-cloud-report-*.json
+tests/security-cloud-report-*.txt
 
 # Pastas de ferramentas ou IDEs (VS Code / JetBrains)
 .vscode/
