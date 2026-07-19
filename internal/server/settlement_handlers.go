@@ -47,6 +47,18 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "status atual não permite depósito"})
 		return
 	}
+	usedElsewhere, err := s.db.HasDepositTxForOtherOrder(r.Context(), id, req.TxHash)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if usedElsewhere {
+		reason := "deposit tx ja vinculada a outra ordem"
+		_ = s.db.UpdateOrderStatus(r.Context(), id, string(models.StatusIncidenteValidacao), map[string]any{"requestId": requestID(r), "depositTx": req.TxHash, "error": reason})
+		_ = s.db.OpenOrderIncident(r.Context(), id, "sell_deposit_tx_replay", "critical", reason, map[string]any{"requestId": requestID(r), "depositTx": req.TxHash})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": reason})
+		return
+	}
 	if err := s.db.UpdateOrderStatus(r.Context(), id, "pago", map[string]any{"requestId": requestID(r), "depositTx": req.TxHash, "depositAmount": req.Amount}); err != nil {
 		writeError(w, err)
 		return
