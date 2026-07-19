@@ -68,6 +68,7 @@ func (s *Server) computeReady(r *http.Request) (int, map[string]any) {
 		"efi_cert_path":   s.cfg.EfiCertificatePath,
 		"efi_cert_error":  certErr,
 		"signer":          s.cfg.SignerUrl != "" && s.cfg.SignerHmacSecret != "",
+		"webhooks":        s.webhooks.Status(),
 		"mode":            s.cfg.Environment,
 		"warnings":        gaps,
 	}
