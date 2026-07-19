@@ -30,6 +30,7 @@ contracts/node_modules/
 contracts/cache/
 contracts/artifacts/
 contracts/typechain-types/
+contracts/wallets/
 
 # Pastas de ferramentas ou IDEs (VS Code / JetBrains)
 .vscode/
