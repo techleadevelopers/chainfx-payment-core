@@ -8,12 +8,12 @@ import (
 func TestAnalyzeReturnsDeterministicEmbeddingAndLatency(t *testing.T) {
 	engine := New("test-secret")
 	input := Input{
-		RequestID:      "req-1",
-		UserID:         "user-1",
-		Level:          1,
-		DocumentURL:    "https://cdn/doc-front.jpg",
+		RequestID:       "req-1",
+		UserID:          "user-1",
+		Level:           1,
+		DocumentURL:     "https://cdn/doc-front.jpg",
 		DocumentBackURL: "https://cdn/doc-back.jpg",
-		FacialVideoURL: "https://cdn/face-video.mp4",
+		FacialVideoURL:  "https://cdn/face-video.mp4",
 	}
 
 	a := engine.Analyze(context.Background(), input)
