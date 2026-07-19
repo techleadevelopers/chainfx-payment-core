@@ -66,12 +66,13 @@ CREATE TABLE IF NOT EXISTS nfc_authorizations (
   amount_brl_minor BIGINT NOT NULL CHECK (amount_brl_minor > 0),
   usdt_rate NUMERIC(20,8) NOT NULL,
   required_usdt_micro BIGINT NOT NULL CHECK (required_usdt_micro > 0),
-  status TEXT NOT NULL CHECK (status IN ('approved','declined','requires_funding','reversed','captured')),
+  status TEXT NOT NULL CHECK (status IN ('approved','declined','requires_funding','reversed','captured','expired')),
   response_code TEXT NOT NULL,
   reason TEXT,
   hold_expires_at TIMESTAMPTZ,
   reversed_at TIMESTAMPTZ,
   captured_at TIMESTAMPTZ,
+  expired_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
