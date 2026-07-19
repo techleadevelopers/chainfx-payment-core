@@ -39,17 +39,19 @@ func (q *mobileQueries) CreateUser(ctx context.Context, email, passwordHash, ful
 }
 
 func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	_ = q.ensureMobileMediaSchema(ctx)
 	email = strings.TrimSpace(strings.ToLower(email))
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
-                SELECT id,email,phone,full_name,password_hash,wallet_address,pix_key,
+                SELECT id,email,phone,full_name,avatar_url,password_hash,wallet_address,pix_key,
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
                 FROM users WHERE lower(email)=lower($1) AND deleted_at IS NULL`, email))
 }
 
 func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.User, error) {
+	_ = q.ensureMobileMediaSchema(ctx)
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
-                SELECT id,email,phone,full_name,password_hash,wallet_address,pix_key,
+                SELECT id,email,phone,full_name,avatar_url,password_hash,wallet_address,pix_key,
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
                 FROM users WHERE id=$1 AND deleted_at IS NULL`, id))
@@ -58,8 +60,8 @@ func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.Use
 func (q *mobileQueries) scanUser(row *sql.Row) (*models.User, error) {
 	u := &models.User{}
 	err := row.Scan(
-		&u.ID, &u.Email, &u.Phone, &u.FullName, &u.PasswordHash,
-		&u.WalletAddress, &u.PixKey, &u.KYCStatus, &u.KYCDocuments,
+		&u.ID, &u.Email, &u.Phone, &u.FullName, &u.AvatarURL,
+		&u.PasswordHash, &u.WalletAddress, &u.PixKey, &u.KYCStatus, &u.KYCDocuments,
 		&u.PinHash, &u.BiometryEnabled, &u.TwoFactorEnabled,
 		&u.TwoFactorSecret, &u.RefreshTokenHash,
 		&u.CreatedAt, &u.UpdatedAt,
@@ -68,6 +70,17 @@ func (q *mobileQueries) scanUser(row *sql.Row) (*models.User, error) {
 		return nil, nil
 	}
 	return u, err
+}
+
+func (q *mobileQueries) ensureMobileMediaSchema(ctx context.Context) error {
+	if _, err := q.sql.ExecContext(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(2048)`); err != nil {
+		return err
+	}
+	if _, err := q.sql.ExecContext(ctx, `ALTER TABLE kyc_requests ADD COLUMN IF NOT EXISTS document_back_url VARCHAR(2048)`); err != nil {
+		return err
+	}
+	_, err := q.sql.ExecContext(ctx, `ALTER TABLE kyc_requests ADD COLUMN IF NOT EXISTS facial_video_url VARCHAR(2048)`)
+	return err
 }
 
 func (q *mobileQueries) UpdateUser(ctx context.Context, id string, fields map[string]any) error {
@@ -190,6 +203,7 @@ func (q *mobileQueries) DeleteUserAccount(ctx context.Context, userID string) er
                        password_hash='deleted',
                        wallet_address=NULL,
                        pix_key=NULL,
+                       avatar_url=NULL,
                        kyc_documents=NULL,
                        pin_hash=NULL,
                        biometry_enabled=false,
