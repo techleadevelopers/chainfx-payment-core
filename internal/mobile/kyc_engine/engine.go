@@ -61,7 +61,8 @@ func New(secret string) *Engine {
 func NewFromEnv(secret string) *Engine {
 	engine := New(secret)
 	if endpoint := strings.TrimSpace(os.Getenv("KYC_ENGINE_PROVIDER_URL")); endpoint != "" {
-		engine.provider = NewHTTPProvider(endpoint, strings.TrimSpace(os.Getenv("KYC_ENGINE_PROVIDER_API_KEY")))
+		apiKey := firstNonEmpty(os.Getenv("KYC_ENGINE_PROVIDER_API_KEY"), os.Getenv("KYC_PROVIDER_API_KEY"))
+		engine.provider = NewHTTPProvider(endpoint, apiKey)
 	}
 	return engine
 }
@@ -84,7 +85,7 @@ func (e *Engine) Analyze(ctx context.Context, in Input) Result {
 			if result.LatencyMS <= 0 {
 				result.LatencyMS = time.Since(start).Milliseconds()
 			}
-			if len(result.Embedding) > 0 && result.EmbeddingHash == "" {
+			if len(result.Embedding) > 0 {
 				result.EmbeddingHash = e.EmbeddingHash(result.Embedding)
 			}
 			if len(result.Embedding) == 0 {
