@@ -69,29 +69,48 @@ Antes de colocar esse contrato em `CUSTODY_TRUSTED_DELEGATES`, faca deploy em te
 
 ```powershell
 cd C:\Users\Paulo\Desktop\payment-gateway\contracts
-npm install
+npm ci --legacy-peer-deps
 npm run compile
 npm test
 ```
 
+O Hardhat carrega automaticamente:
+
+- `C:\Users\Paulo\Desktop\payment-gateway\.env`
+- `C:\Users\Paulo\Desktop\payment-gateway\contracts\.env`
+
+Chaves aceitas para deploy, em ordem:
+
+```text
+DEPLOYER_PRIVATE_KEY
+PRIVATE_KEY
+EVM_PRIVATE_KEY
+```
+
+O script nunca imprime a chave privada. Ele imprime apenas endereço público do deployer/owner/operator.
+
 ## Deploy BSC Testnet
 
 ```powershell
-$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:PRIVATE_KEY="0x..."
 $env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:CONTRACT_OPERATOR="0xSignerOuOperador"
 $env:BSC_TESTNET_RPC_URL="https://data-seed-prebsc-1-s1.binance.org:8545/"
+npm run preflight:testnet
 npm run deploy:testnet
 ```
 
 ## Deploy BSC Mainnet
 
 ```powershell
-$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:PRIVATE_KEY="0x..."
 $env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:CONTRACT_OPERATOR="0xSignerOuOperador"
 $env:BSC_RPC_URL="https://..."
 $env:BSC_USDT_CONTRACT="0x55d398326f99059fF775485246999027B3197955"
 $env:TREASURY_MAX_TRANSFER_USDT="100"
 $env:TREASURY_DAILY_LIMIT_USDT="1000"
+npm run preflight:bsc
 npm run deploy:bsc
 ```
 
@@ -100,14 +119,16 @@ npm run deploy:bsc
 Polygon Amoy é a testnet atual para Polygon PoS. Chain ID `80002`; mainnet Polygon PoS usa chain ID `137`. A Polygon mantém instruções oficiais para adicionar Polygon/Amoy via ChainList/MetaMask, e a página de Amoy informa RPC `https://rpc-amoy.polygon.technology/` e chain ID `80002`.
 
 ```powershell
-$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:PRIVATE_KEY="0x..."
 $env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:CONTRACT_OPERATOR="0xSignerOuOperador"
 $env:POLYGON_AMOY_RPC_URL="https://rpc-amoy.polygon.technology/"
 $env:TREASURY_TOKEN_CONTRACT="0xTokenUSDCouUSDTNaAmoy"
 $env:TREASURY_TOKEN_SYMBOL="USDC"
 $env:TREASURY_TOKEN_DECIMALS="6"
 $env:TREASURY_MAX_TRANSFER="100"
 $env:TREASURY_DAILY_LIMIT="1000"
+npm run preflight:polygon-amoy
 npm run deploy:polygon-amoy
 ```
 
@@ -116,26 +137,45 @@ npm run deploy:polygon-amoy
 Use Polygon para capability settlement/payout quando fizer sentido reduzir custo de gas ou atender providers que já liquidam em Polygon. Nao mude o fluxo principal BSC sem antes adaptar signer/core para aceitar `POLYGON` ponta a ponta.
 
 ```powershell
-$env:DEPLOYER_PRIVATE_KEY="0x..."
+$env:PRIVATE_KEY="0x..."
 $env:CONTRACT_OWNER="0xMultisigOuOwner"
+$env:CONTRACT_OPERATOR="0xSignerOuOperador"
 $env:POLYGON_RPC_URL="https://polygon-rpc.com/"
 $env:POLYGON_USDC_CONTRACT="0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 $env:TREASURY_TOKEN_SYMBOL="USDC"
 $env:TREASURY_TOKEN_DECIMALS="6"
 $env:TREASURY_MAX_TRANSFER="100"
 $env:TREASURY_DAILY_LIMIT="1000"
+npm run preflight:polygon
 npm run deploy:polygon
 ```
 
 Depois do deploy, o script imprime:
 
 ```env
-CUSTODY_TRUSTED_DELEGATES=0x...
 TREASURY_CONTRACT=0x...
 DELEGATE_REGISTRY=0x...
+CUSTODY_TRUSTED_DELEGATES=0x...
+CUSTODY_TRUSTED_DELEGATE_CODE_HASH=0x...
 ```
 
+Tambem grava `contracts/deployments/<network>.json` com rede, chainId, owner, operator, vault, registry, delegate e codehash. Esse arquivo fica ignorado por git porque e artefato de deploy.
+
 Preencha `CUSTODY_TRUSTED_DELEGATES` somente com delegate auditado e validado. Nunca use placeholder como `0xContratoDelegateSeguro`.
+
+### O que o deploy configura automaticamente
+
+Quando `CONTRACT_OWNER` e a carteira deployer sao o mesmo endereco, o script:
+
+- faz deploy do vault, registry e delegate;
+- inicializa o delegate com `owner` e `operator`;
+- configura `CONTRACT_OPERATOR` como operator do vault;
+- configura guardians de `CONTRACT_GUARDIANS`;
+- configura recipients de `TREASURY_ALLOWED_RECIPIENTS`;
+- aplica policy do token BSC/Polygon se o token estiver configurado;
+- registra o delegate no registry com `codeHash`.
+
+Quando `CONTRACT_OWNER` for diferente do deployer, o script faz deploy e inicializa o delegate, mas para antes das chamadas owner-only. Nesse caso o owner precisa configurar token/operator/guardian/recipient/registry manualmente.
 
 ## Politica Recomendada
 
