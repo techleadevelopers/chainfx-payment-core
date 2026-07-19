@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	pathpkg "path"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,9 @@ import (
 
 func (s *Server) withPublicSurfaceGuards(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.rejectSensitivePathProbe(w, r) {
+			return
+		}
 		if s.rejectQueryAPIKeyInProduction(w, r) {
 			return
 		}
@@ -26,6 +30,34 @@ func (s *Server) withPublicSurfaceGuards(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) rejectSensitivePathProbe(w http.ResponseWriter, r *http.Request) bool {
+	if !isSensitiveProbePath(r.URL.Path) {
+		return false
+	}
+	http.NotFound(w, r)
+	return true
+}
+
+func isSensitiveProbePath(rawPath string) bool {
+	normalized := "/" + strings.TrimLeft(pathpkg.Clean("/"+strings.TrimSpace(rawPath)), "/")
+	lower := strings.ToLower(normalized)
+	blockedPrefixes := []string{
+		"/.env",
+		"/.git",
+		"/secrets",
+		"/debug/pprof",
+		"/actuator",
+		"/phpinfo.php",
+		"/config.json",
+	}
+	for _, prefix := range blockedPrefixes {
+		if lower == prefix || strings.HasPrefix(lower, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) rejectQueryAPIKeyInProduction(w http.ResponseWriter, r *http.Request) bool {
@@ -268,13 +300,36 @@ func cors(cfg *config.Config, next http.Handler) http.Handler {
 	})
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(cfg *config.Config, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if cfg != nil && cfg.IsProduction() {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+		if shouldApplyAPICSP(r) {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func shouldApplyAPICSP(r *http.Request) bool {
+	if r == nil {
+		return true
+	}
+	path := r.URL.Path
+	if path == "/" || path == "/admin" || path == "/developers" || strings.HasPrefix(path, "/app/") {
+		return false
+	}
+	if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/agent/") || strings.HasPrefix(path, "/mcp/") ||
+		strings.HasPrefix(path, "/.well-known/") || strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/x402/") ||
+		path == "/healthz" || path == "/readyz" || path == "/rates" || path == "/openapi.json" || path == "/metrics" {
+		return true
+	}
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return !strings.Contains(accept, "text/html")
 }
 
 type serverTimingWriter struct {
