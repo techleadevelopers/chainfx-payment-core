@@ -112,15 +112,18 @@ func (q *mobileQueries) ListRailsByCountry(ctx context.Context, countryCode stri
 // ─── KYC ──────────────────────────────────────────────────────────────────────
 
 func (q *mobileQueries) CreateKYCRequest(ctx context.Context, userID string, level models.KYCLevel,
-	docType, docURL, selfieURL, proofAddrURL, proofIncURL *string) (*models.KYCRequest, error) {
+	docType, docURL, docBackURL, selfieURL, facialVideoURL, proofAddrURL, proofIncURL *string) (*models.KYCRequest, error) {
+	if err := q.ensureMobileMediaSchema(ctx); err != nil {
+		return nil, err
+	}
 	var id string
 	err := q.sql.QueryRowContext(ctx, `
 		INSERT INTO kyc_requests
 		  (user_id, level, status, document_type, document_url,
-		   selfie_url, proof_of_address_url, proof_of_income_url)
-		VALUES ($1,$2,'pending',$3,$4,$5,$6,$7)
+		   document_back_url, selfie_url, facial_video_url, proof_of_address_url, proof_of_income_url)
+		VALUES ($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9)
 		RETURNING id`,
-		userID, int(level), docType, docURL, selfieURL, proofAddrURL, proofIncURL).Scan(&id)
+		userID, int(level), docType, docURL, docBackURL, selfieURL, facialVideoURL, proofAddrURL, proofIncURL).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -128,14 +131,15 @@ func (q *mobileQueries) CreateKYCRequest(ctx context.Context, userID string, lev
 }
 
 func (q *mobileQueries) GetKYCRequest(ctx context.Context, id string) (*models.KYCRequest, error) {
+	_ = q.ensureMobileMediaSchema(ctx)
 	k := &models.KYCRequest{}
 	err := q.sql.QueryRowContext(ctx, `
 		SELECT id,user_id,level,status,document_type,document_url,selfie_url,
-		       proof_of_address_url,proof_of_income_url,reviewer_notes,
+		       document_back_url,facial_video_url,proof_of_address_url,proof_of_income_url,reviewer_notes,
 		       submitted_at,reviewed_at,created_at,updated_at
 		FROM kyc_requests WHERE id=$1`, id).Scan(
 		&k.ID, &k.UserID, &k.Level, &k.Status, &k.DocumentType, &k.DocumentURL,
-		&k.SelfieURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
+		&k.SelfieURL, &k.DocumentBackURL, &k.FacialVideoURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
 		&k.SubmittedAt, &k.ReviewedAt, &k.CreatedAt, &k.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -144,15 +148,16 @@ func (q *mobileQueries) GetKYCRequest(ctx context.Context, id string) (*models.K
 }
 
 func (q *mobileQueries) GetLatestKYCByUser(ctx context.Context, userID string) (*models.KYCRequest, error) {
+	_ = q.ensureMobileMediaSchema(ctx)
 	k := &models.KYCRequest{}
 	err := q.sql.QueryRowContext(ctx, `
 		SELECT id,user_id,level,status,document_type,document_url,selfie_url,
-		       proof_of_address_url,proof_of_income_url,reviewer_notes,
+		       document_back_url,facial_video_url,proof_of_address_url,proof_of_income_url,reviewer_notes,
 		       submitted_at,reviewed_at,created_at,updated_at
 		FROM kyc_requests WHERE user_id=$1
 		ORDER BY created_at DESC LIMIT 1`, userID).Scan(
 		&k.ID, &k.UserID, &k.Level, &k.Status, &k.DocumentType, &k.DocumentURL,
-		&k.SelfieURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
+		&k.SelfieURL, &k.DocumentBackURL, &k.FacialVideoURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
 		&k.SubmittedAt, &k.ReviewedAt, &k.CreatedAt, &k.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -170,12 +175,13 @@ func (q *mobileQueries) GetApprovedKYCLevel(ctx context.Context, userID string) 
 }
 
 func (q *mobileQueries) ListKYCByUser(ctx context.Context, userID string, limit int) ([]models.KYCRequest, error) {
+	_ = q.ensureMobileMediaSchema(ctx)
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	rows, err := q.sql.QueryContext(ctx, `
 		SELECT id,user_id,level,status,document_type,document_url,selfie_url,
-		       proof_of_address_url,proof_of_income_url,reviewer_notes,
+		       document_back_url,facial_video_url,proof_of_address_url,proof_of_income_url,reviewer_notes,
 		       submitted_at,reviewed_at,created_at,updated_at
 		FROM kyc_requests WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2`, userID, limit)
 	if err != nil {
@@ -186,7 +192,7 @@ func (q *mobileQueries) ListKYCByUser(ctx context.Context, userID string, limit 
 	for rows.Next() {
 		k := models.KYCRequest{}
 		_ = rows.Scan(&k.ID, &k.UserID, &k.Level, &k.Status, &k.DocumentType, &k.DocumentURL,
-			&k.SelfieURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
+			&k.SelfieURL, &k.DocumentBackURL, &k.FacialVideoURL, &k.ProofOfAddressURL, &k.ProofOfIncomeURL, &k.ReviewerNotes,
 			&k.SubmittedAt, &k.ReviewedAt, &k.CreatedAt, &k.UpdatedAt)
 		out = append(out, k)
 	}
