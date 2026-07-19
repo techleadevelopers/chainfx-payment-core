@@ -80,6 +80,7 @@ func main() {
 	if workerMgr.PSPRouter != nil {
 		api.WithPSP(workerMgr.PSPRouter)
 	}
+	api.StartWebhooks(ctx)
 
 	mob := mobile.New(cfg, db, workerMgr)
 	httpServer := &http.Server{
