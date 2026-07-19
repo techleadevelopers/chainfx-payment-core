@@ -187,6 +187,8 @@ CLOUDINARY_URL
 CLOUDINARY_API_KEY
 CLOUDINARY_API_SECRET
 FACE_BIOMETRY_SECRET  # preferencial; fallback LGPD_SECRET/WEBHOOK_SECRET/MOBILE_JWT_SECRET
+KYC_ENGINE_PROVIDER_URL      # opcional; ativa provider OCR/facial/liveness real
+KYC_ENGINE_PROVIDER_API_KEY  # bearer token do provider
 ```
 
 Dados sensíveis:
@@ -197,7 +199,23 @@ Dados sensíveis:
 - `embedding_hash` permite detectar múltiplas contas com o mesmo rosto sem expor o embedding.
 - `kyc_risk_events` registra verificações recorrentes, risco, IP, device fingerprint e metadados.
 
-Observação técnica: a engine atual é determinística e plugável. Ela entrega contrato, score, antifraude, criptografia, métricas e testes, mas OCR/facial/liveness reais devem ser conectados por provider especializado antes de tratar o resultado como verificação biométrica regulatória completa.
+Modo produção real self-hosted:
+
+- Configure `KYC_ENGINE_PROVIDER_URL` para apontar para um serviço privado nosso de OCR/facial/liveness.
+- O backend envia o payload KYC para esse provider e espera scores, decisão, embedding e detalhes.
+- Se `KYC_ENGINE_PROVIDER_URL` não estiver definido, a engine usa modo determinístico de desenvolvimento.
+- `scripts/kyc_provider_local_ai.py` é uma implementação de referência self-hosted para ligar modelos locais.
+- `scripts/kyc_engine_efficiency.ps1` mede latência HTTP e métricas da engine contra `/api/mobile/kyc/engine/metrics`.
+
+Componentes esperados no provider local:
+
+- OCR self-hosted para frente/verso do documento.
+- Detector de rosto em documento e video.
+- Modelo local de face embedding.
+- Modelo local de liveness por movimento, pose, piscada e replay.
+- Classificador antifraude local para tela, replay, deepfake e baixa qualidade.
+
+Observação técnica: a engine embutida entrega contrato, score, antifraude, criptografia, métricas e testes. Para verificação biométrica bancária real dentro do nosso ecossistema, rode o provider local com modelos próprios e configure `KYC_ENGINE_PROVIDER_URL`.
 
 Documentação detalhada: `internal/mobile/kyc_engine/README.md`.
 
