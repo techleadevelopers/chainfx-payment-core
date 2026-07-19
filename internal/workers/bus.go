@@ -1,8 +1,10 @@
 package workers
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Event is the internal worker bus message.
@@ -35,13 +37,17 @@ func NewEventBus() *EventBus {
 	}
 }
 
+const (
+	defaultSubscriberBuffer = 100
+	criticalEventWait       = 2 * time.Second
+)
+
 // Subscribe creates a buffered channel for the given event type.
-// The channel has a buffer of 100 events to prevent blocking publishers.
 func (b *EventBus) Subscribe(eventType string) chan Event {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ch := make(chan Event, 100)
+	ch := make(chan Event, defaultSubscriberBuffer)
 	if b.closed {
 		close(ch)
 		return ch
@@ -71,7 +77,8 @@ func (b *EventBus) Unsubscribe(eventType string, ch chan Event) {
 }
 
 // Publish sends an event to all subscribers of its type.
-// If a subscriber's channel is full, the event is dropped (non-blocking).
+// Money-moving events wait briefly for backpressure instead of dropping
+// immediately; low-value telemetry remains non-blocking.
 func (b *EventBus) Publish(event Event) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -89,13 +96,43 @@ func (b *EventBus) Publish(event Event) {
 	}
 
 	for _, ch := range subs {
-		select {
-		case ch <- event:
-			// Event delivered
-		default:
-			// Channel full, drop event
-			b.dropped.Add(1)
+		if b.publishOne(ch, event) {
+			continue
 		}
+		b.dropped.Add(1)
+		slog.Error("worker bus dropped event", "type", event.Type, "order_id", event.OrderID, "critical", isCriticalMoneyEvent(event.Type))
+	}
+}
+
+func (b *EventBus) publishOne(ch chan Event, event Event) bool {
+	select {
+	case ch <- event:
+		return true
+	default:
+	}
+	if !isCriticalMoneyEvent(event.Type) {
+		return false
+	}
+	timer := time.NewTimer(criticalEventWait)
+	defer timer.Stop()
+	select {
+	case ch <- event:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func isCriticalMoneyEvent(eventType string) bool {
+	switch eventType {
+	case "buy.paid", "buy.sent", "buy.failed",
+		"payout.requested", "payout.settled", "payout.manual_required",
+		"onchain.detected", "m2m.deposit.confirmed", "m2m.settlement.done", "m2m.settlement.failed",
+		"nfc.capture.completed", "nfc.authorization.reversed",
+		"mobile.payout.requested", "sweep.sent":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -131,7 +168,7 @@ func (b *EventBus) Close() {
 		return
 	}
 	b.closed = true
-	
+
 	// Close all subscriber channels
 	for eventType, subs := range b.subscribers {
 		for _, ch := range subs {
