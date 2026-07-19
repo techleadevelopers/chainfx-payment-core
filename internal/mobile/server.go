@@ -239,8 +239,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/mobile/uploads/kyc", s.requireAuth(s.handleUploadKYCMedia))
 	mux.HandleFunc("POST /api/mobile/kyc/submit", s.requireAuth(s.handleKYCSubmit))
 	mux.HandleFunc("GET /api/mobile/kyc/status", s.requireAuth(s.handleKYCStatusV2))
+	mux.HandleFunc("GET /api/mobile/kyc/engine/status", s.requireAuth(s.handleKYCAnalysisStatus))
+	mux.HandleFunc("GET /api/mobile/kyc/engine/metrics", s.requireAuth(s.handleKYCEngineMetrics))
 	mux.HandleFunc("GET /api/mobile/kyc/history", s.requireAuth(s.handleKYCHistory))
 	mux.HandleFunc("GET /api/mobile/kyc/limits", s.requireAuth(s.handleKYCLimits))
+	mux.HandleFunc("POST /api/mobile/biometry/verify", s.requireAuth(s.handleBiometryVerify))
 
 	// ── Phase 5: Swap (crypto→crypto) ────────────────────────────────────────
 	mux.HandleFunc("POST /api/mobile/swap/quote", s.requireAuth(s.handleSwapQuote))
