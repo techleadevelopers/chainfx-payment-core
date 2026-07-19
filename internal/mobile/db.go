@@ -87,6 +87,49 @@ func (q *mobileQueries) UpdateUser(ctx context.Context, id string, fields map[st
 	return err
 }
 
+func (q *mobileQueries) AttachSystemWallet(ctx context.Context, userID, walletAddress, encryptedPrivateKey string) (*models.User, error) {
+	tx, err := q.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx, `
+                INSERT INTO mobile_wallet_keys (user_id, wallet_address, encrypted_private_key)
+                VALUES ($1::uuid, $2, $3)
+                ON CONFLICT (user_id) DO NOTHING`,
+		userID, walletAddress, encryptedPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	var selectedAddress string
+	err = tx.QueryRowContext(ctx, `
+                SELECT wallet_address
+                  FROM mobile_wallet_keys
+                 WHERE user_id=$1::uuid`, userID).Scan(&selectedAddress)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = tx.ExecContext(ctx, `
+                UPDATE users
+                   SET wallet_address=$1,
+                       updated_at=NOW()
+                 WHERE id=$2::uuid
+                   AND deleted_at IS NULL
+                   AND (wallet_address IS NULL OR wallet_address='')`,
+		selectedAddress, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return q.GetUserByID(ctx, userID)
+}
+
 func (q *mobileQueries) IsUserActive(ctx context.Context, userID string) (bool, error) {
 	var exists bool
 	err := q.sql.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND deleted_at IS NULL)", userID).Scan(&exists)
