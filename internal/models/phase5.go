@@ -99,7 +99,9 @@ type KYCRequest struct {
 	Status            KYCRequestStatus `json:"status"                        db:"status"`
 	DocumentType      *string          `json:"document_type,omitempty"       db:"document_type"`
 	DocumentURL       *string          `json:"document_url,omitempty"        db:"document_url"`
+	DocumentBackURL   *string          `json:"document_back_url,omitempty"   db:"document_back_url"`
 	SelfieURL         *string          `json:"selfie_url,omitempty"          db:"selfie_url"`
+	FacialVideoURL    *string          `json:"facial_video_url,omitempty"    db:"facial_video_url"`
 	ProofOfAddressURL *string          `json:"proof_of_address_url,omitempty" db:"proof_of_address_url"`
 	ProofOfIncomeURL  *string          `json:"proof_of_income_url,omitempty"  db:"proof_of_income_url"`
 	ReviewerNotes     *string          `json:"reviewer_notes,omitempty"      db:"reviewer_notes"`
