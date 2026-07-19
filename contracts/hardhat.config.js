@@ -1,10 +1,13 @@
 require("@nomicfoundation/hardhat-toolbox");
+const { firstEnv, firstUrlEnv, loadContractEnv, normalizePrivateKey } = require("./scripts/env");
 
-const privateKey = process.env.DEPLOYER_PRIVATE_KEY || "";
-const bscRpc = process.env.BSC_RPC_URL || process.env.RPC_URL || "";
-const bscTestnetRpc = process.env.BSC_TESTNET_RPC_URL || "";
-const polygonRpc = process.env.POLYGON_RPC_URL || "";
-const polygonAmoyRpc = process.env.POLYGON_AMOY_RPC_URL || process.env.POLYGON_TESTNET_RPC_URL || "";
+loadContractEnv();
+
+const privateKey = normalizePrivateKey(firstEnv("DEPLOYER_PRIVATE_KEY", "PRIVATE_KEY", "EVM_PRIVATE_KEY"));
+const bscRpc = firstUrlEnv("BSC_RPC_URL", "BSC_RPC_URLS", "RPC_URL");
+const bscTestnetRpc = firstUrlEnv("BSC_TESTNET_RPC_URL", "BSC_TESTNET_RPC_URLS");
+const polygonRpc = firstUrlEnv("POLYGON_RPC_URL", "POLYGON_RPC_URLS");
+const polygonAmoyRpc = firstUrlEnv("POLYGON_AMOY_RPC_URL", "POLYGON_TESTNET_RPC_URL", "POLYGON_AMOY_RPC_URLS");
 
 const accounts = privateKey ? [privateKey] : [];
 
