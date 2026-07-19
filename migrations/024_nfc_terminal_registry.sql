@@ -26,5 +26,9 @@ CREATE TABLE IF NOT EXISTS nfc_terminals (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_nfc_terminal_api_key_hash ON nfc_terminals(api_key_hash);
 CREATE INDEX IF NOT EXISTS idx_nfc_terminals_status ON nfc_terminals(status, merchant_id);
 
+ALTER TABLE nfc_authorizations DROP CONSTRAINT IF EXISTS nfc_authorizations_status_check;
+ALTER TABLE nfc_authorizations ADD CONSTRAINT nfc_authorizations_status_check
+  CHECK (status IN ('approved','declined','requires_funding','reversed','captured','expired'));
+ALTER TABLE nfc_authorizations ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ;
 ALTER TABLE nfc_authorizations DROP CONSTRAINT IF EXISTS nfc_authorizations_idempotency_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_nfc_auth_terminal_idempotency ON nfc_authorizations(terminal_id, idempotency_key);
