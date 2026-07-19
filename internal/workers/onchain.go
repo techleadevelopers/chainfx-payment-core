@@ -538,6 +538,22 @@ func (ow *OnchainWorker) confirmDeposit(ctx context.Context, network onchainNetw
 		slog.Debug("OnchainWorker: deposito ja registrado, ignorando", "network", network.Name, "tx", txHash)
 		return
 	}
+	usedElsewhere, err := ow.db.HasDepositTxForOtherOrder(cCtx, orderID, txHash)
+	if err != nil {
+		slog.Warn("OnchainWorker: erro ao verificar replay de tx", "network", network.Name, "order_id", orderID, "tx", txHash, "err", err)
+		return
+	}
+	if usedElsewhere {
+		reason := "deposit tx ja vinculada a outra ordem"
+		slog.Error("OnchainWorker: replay de deposito bloqueado", "network", network.Name, "order_id", orderID, "tx", txHash)
+		_ = ow.db.UpdateOrderStatus(cCtx, orderID, string(models.StatusIncidenteValidacao), map[string]any{
+			"depositTx": txHash, "block": blockNum, "network": network.Name, "error": reason,
+		})
+		_ = ow.db.OpenOrderIncident(cCtx, orderID, "sell_deposit_tx_replay", "critical", reason, map[string]any{
+			"depositTx": txHash, "block": blockNum, "network": network.Name,
+		})
+		return
+	}
 
 	amountFloat := tokenAmountFloat(rawAmount, network.TokenDecimals)
 	tol := ow.depositTolerance()
