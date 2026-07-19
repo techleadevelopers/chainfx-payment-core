@@ -14,6 +14,11 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "usuario nao encontrado"})
 		return
 	}
+	user, err = s.ensureUserWallet(r.Context(), user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao criar carteira do usuario"})
+		return
+	}
 
 	walletAddr := ""
 	if user.WalletAddress != nil {
@@ -44,7 +49,16 @@ func (s *Server) handleWalletTokens(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWalletAddress(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
-	user, _ := mobileDB(s.db).GetUserByID(r.Context(), uid)
+	user, err := mobileDB(s.db).GetUserByID(r.Context(), uid)
+	if err != nil || user == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "usuario nao encontrado"})
+		return
+	}
+	user, err = s.ensureUserWallet(r.Context(), user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao criar carteira do usuario"})
+		return
+	}
 	if user != nil && user.WalletAddress != nil && *user.WalletAddress != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"wallet_address": *user.WalletAddress,
