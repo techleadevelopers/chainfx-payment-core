@@ -131,6 +131,7 @@ Integracoes recentes refletidas no backend:
 - **Efi PSP Layer**: `internal/psp` com `EfiAdapter`, `Router`, health probe, fallback/restore e parsing de webhooks PIX em lote. `cmd/api/main.go` monta o router quando credenciais/certificado Efi existem.
 - **Efi Credit Card BUY**: `/api/buy` aceita `paymentMethod=credit_card`, `paymentToken`, `customer` e `billingAddress`; `/api/efi/charges/webhook/buy` consulta notificacao Efi e liquida apenas status `paid`.
 - **NFC Closed-Loop Wallet Card**: `/api/mobile/nfc/card` e `/api/mobile/nfc/provision` entregam um cartao digital HCE fechado para o app mobile; `/api/nfc/authorize` autoriza pagamentos de terminal ChainFX com token `nfc1...`, idempotencia e hold de USDT. Isso nao e Visa/Mastercard nem POS de adquirente comum.
+- **Mobile KYC + Biometria Facial Propria**: o app mobile envia avatar, documento frente/verso e video facial guiado para Cloudinary via backend. O `KYCWorker` processa `kyc.submitted`, calcula score antifraude, mede latencia, decide `approved`, `manual_review` ou `rejected`, e salva apenas o face embedding criptografado em `user_face_biometrics`.
 - **Gas Station / Paymaster**: `internal/paymaster` entrega oracle, estimator, idempotency, retry, batcher, token relayer e service top-level. Rotas publicas/admin em `/v1/gas/*`.
 - **AutoSweeper + Paymaster Loop**: `NewWorkerManager(db, cfg, mailer, pool *rpc.Pool)` recebe `rpc.Pool`, inicializa 9 workers e inclui AutoSweeper/Paymaster relay loop.
 - **MCP Capability Network**: `.mcp/server.json`, `/mcp/initialize`, `/mcp/capabilities.json`, `/agent/v1/capabilities` e Agent Pay com `createPaymentIntent`, `getPaymentIntent`, `listAgentPaymentIntents`.
@@ -152,7 +153,53 @@ gas_station.sql
 schema_chaos.sql
 schema_m2m.sql
 schema_agent_pricing.sql
+migrations/016_mobile_cloudinary_media.sql
+migrations/017_mobile_kyc_engine.sql
 ```
+
+## Mobile KYC, Cloudinary e Biometria Facial
+
+O backend mobile possui um fluxo KYC proprio, assíncrono e auditável:
+
+1. O app captura frente do documento, verso do documento e um video facial guiado.
+2. O backend recebe os arquivos autenticados em `POST /api/mobile/uploads/kyc` e envia para Cloudinary.
+3. O app chama `POST /api/mobile/kyc/submit` com as URLs geradas.
+4. O `KYCWorker` escuta `kyc.submitted`, roda a engine interna e grava resultado em `kyc_analysis_results`.
+5. Quando aprovado, o backend salva somente o `face_embedding_encrypted` em `user_face_biometrics`.
+6. A biometria recorrente usa `POST /api/mobile/biometry/verify` para confirmar rosto em fluxos sensíveis como saque, troca de dispositivo, troca de PIN ou operações futuras.
+
+Endpoints principais:
+
+```text
+POST /api/mobile/user/avatar
+POST /api/mobile/uploads/kyc
+POST /api/mobile/kyc/submit
+GET  /api/mobile/kyc/status
+GET  /api/mobile/kyc/engine/status
+GET  /api/mobile/kyc/engine/metrics
+POST /api/mobile/biometry/verify
+```
+
+Variáveis esperadas:
+
+```text
+CLOUDINARY_URL
+CLOUDINARY_API_KEY
+CLOUDINARY_API_SECRET
+FACE_BIOMETRY_SECRET  # preferencial; fallback LGPD_SECRET/WEBHOOK_SECRET/MOBILE_JWT_SECRET
+```
+
+Dados sensíveis:
+
+- Imagens e vídeos ficam como evidência KYC no storage configurado.
+- O banco não usa imagem como biometria primária.
+- O dado biométrico persistido é um embedding criptografado com AES-GCM.
+- `embedding_hash` permite detectar múltiplas contas com o mesmo rosto sem expor o embedding.
+- `kyc_risk_events` registra verificações recorrentes, risco, IP, device fingerprint e metadados.
+
+Observação técnica: a engine atual é determinística e plugável. Ela entrega contrato, score, antifraude, criptografia, métricas e testes, mas OCR/facial/liveness reais devem ser conectados por provider especializado antes de tratar o resultado como verificação biométrica regulatória completa.
+
+Documentação detalhada: `internal/mobile/kyc_engine/README.md`.
 
 ## Indice
 
