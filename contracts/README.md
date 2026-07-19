@@ -11,6 +11,60 @@ O Gas Station/Paymaster integrado hoje roda majoritariamente off-chain:
 
 Os contratos deste diretorio continuam sendo a camada opcional de vault/delegates para governanca on-chain, limites e hardening. Nao sao requisito para publicar o MCP ou usar `/v1/gas/*` no corte atual.
 
+## Laboratorio sem contratos
+
+Enquanto o fluxo produtivo roda com wallet direta + signer + custody guard, esta pasta pode ser usada como bancada de teste:
+
+- gerar wallets de sistema/teste;
+- criar wallets EIP probe;
+- manter contratos compilando para evolucao futura;
+- rodar testes adversariais contra o signer sem fazer deploy;
+- validar HMAC, nonce/replay, payload tampering, allowlist e readiness.
+
+Smoke adversarial do signer:
+
+```powershell
+cd C:\Users\Paulo\Desktop\payment-gateway\contracts
+$env:SIGNER_URL="http://127.0.0.1:4010"
+$env:SIGNER_HMAC_SECRET="mesmo segredo do signer"
+npm run smoke:signer-adversarial
+```
+
+O script usa `amount: "0"` nos casos assinados para passar pela autenticação e ser barrado por policy antes de qualquer envio on-chain. Nao use wallets mainnet com saldo nesses testes.
+
+O final do relatorio imprime latencia agregada:
+
+```text
+count=15 min=...ms avg=...ms p50=...ms p55=...ms p75=...ms p90=...ms p95=...ms p99=...ms max=...ms
+```
+
+Casos cobertos:
+
+- HMAC ausente/invalido;
+- timestamp expirado;
+- payload alterado depois da assinatura;
+- replay de nonce;
+- replay paralelo do mesmo nonce;
+- token fora da allowlist;
+- valor acima do limite;
+- rede invalida;
+- recipient invalido;
+- idempotency key repetida;
+- `/readyz` sem treasury contract obrigatorio.
+
+Teste live/testnet com envio real fica separado e exige flag explicita:
+
+```powershell
+$env:SIGNER_URL="http://127.0.0.1:4010"
+$env:SIGNER_HMAC_SECRET="mesmo segredo do signer"
+$env:SIGNER_LIVE_TEST_TO="0xWalletDeTeste"
+$env:SIGNER_LIVE_TEST_TOKEN="0xTokenDeTeste"
+$env:SIGNER_LIVE_TEST_AMOUNT="0.01"
+npm run smoke:signer-live-testnet -- --i-understand-this-sends-funds
+```
+
+Esse comando envia transacao de verdade. Use apenas testnet ou wallet com saldo pequeno.
+
 
 Contratos editaveis para operar custodia/payout em redes EVM com foco em seguranca operacional. BSC continua sendo o caminho principal do core atual; Polygon foi adicionada como rede opcional para deploy do mesmo vault em liquidação/settlement de baixo custo.
 
