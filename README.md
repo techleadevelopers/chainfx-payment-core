@@ -130,7 +130,7 @@ Integracoes recentes refletidas no backend:
 - **Hybrid Human + Agent-to-Agent Rail**: o mesmo gateway atende usuarios humanos, web/mobile, consoles administrativos, agentes A2A, clientes MCP, x402 e marketplaces de capability.
 - **Efi PSP Layer**: `internal/psp` com `EfiAdapter`, `Router`, health probe, fallback/restore e parsing de webhooks PIX em lote. `cmd/api/main.go` monta o router quando credenciais/certificado Efi existem.
 - **Efi Credit Card BUY**: `/api/buy` aceita `paymentMethod=credit_card`, `paymentToken`, `customer` e `billingAddress`; `/api/efi/charges/webhook/buy` consulta notificacao Efi e liquida apenas status `paid`.
-- **NFC Closed-Loop Wallet Card**: `/api/mobile/nfc/card` e `/api/mobile/nfc/provision` entregam um cartao digital HCE fechado para o app mobile; `/api/nfc/authorize` autoriza pagamentos de terminal ChainFX com token `nfc1...`, idempotencia e hold de USDT. Isso nao e Visa/Mastercard nem POS de adquirente comum.
+- **ChainFX Tap NFC**: `/api/mobile/nfc/card` e `/api/mobile/nfc/provision` entregam token HCE fechado para o app mobile; `/api/nfc/authorize` autoriza pagamentos de terminal ChainFX com token `nfc1...`, idempotencia e hold de USDT. Isso nao usa Visa/Mastercard: o terminal fala com a API ChainFX e o settlement BRL do recebedor segue pelo trilho Efi/PIX.
 - **Mobile KYC + Biometria Facial Propria**: o app mobile envia avatar, documento frente/verso e video facial guiado para Cloudinary via backend. O `KYCWorker` processa `kyc.submitted`, calcula score antifraude, mede latencia, decide `approved`, `manual_review` ou `rejected`, e salva apenas o face embedding criptografado em `user_face_biometrics`.
 - **Gas Station / Paymaster**: `internal/paymaster` entrega oracle, estimator, idempotency, retry, batcher, token relayer e service top-level. Rotas publicas/admin em `/v1/gas/*`.
 - **AutoSweeper + Paymaster Loop**: `NewWorkerManager(db, cfg, mailer, pool *rpc.Pool)` recebe `rpc.Pool`, inicializa 9 workers e inclui AutoSweeper/Paymaster relay loop.
@@ -354,9 +354,9 @@ Documentação detalhada: `internal/mobile/kyc_engine/README.md`.
 - **Registries**: MCP Registry, A2A Agent Card, OpenAPI e AGNTCY/OASF-style record mantem discovery externo.
 - **Settlement**: USDT/USDC BSC, PIX/card via PSP, signer isolado, workers, idempotencia, receipts e ledger.
 
-### NFC Closed-Loop Wallet Card
+### ChainFX Tap NFC
 
-O trilho NFC atual e um cartao digital fechado da ChainFX, desenhado para app mobile + leitor/terminal ChainFX. Ele nao se registra como emissor de bandeira, nao usa PAN real, nao usa CVV e nao tenta capturar POS Visa/Mastercard.
+O trilho NFC atual e proprio da ChainFX, desenhado para app mobile + leitor/terminal ChainFX. Ele nao se registra como emissor de bandeira, nao usa PAN real, nao usa CVV e nao tenta capturar POS Visa/Mastercard. O recebedor e liquidado pela ChainFX via Efi/PIX.
 
 Fluxo de producao:
 
@@ -368,11 +368,13 @@ ChainFX Terminal -> POST /api/nfc/authorize
 Go API -> verifica token, idempotencia, saldo NFC e trava USDT
 Terminal <- response_code 00 / 51 / 05
 ChainFX Terminal -> POST /api/nfc/authorizations/{id}/capture ou /reverse
+Capture -> debita saldo USDT travado e publica nfc.capture.completed
+Settlement operacional -> Efi/PIX para o recebedor + conciliacao
 ```
 
 Endpoints:
 
-- `GET /api/mobile/nfc/card`: retorna metadados do cartao digital, AID `F222222222`, rede e saldo NFC.
+- `GET /api/mobile/nfc/card`: retorna metadados do ChainFX Tap, AID `F222222222`, rede, saldo NFC, `card_network=none` e `fiat_settlement.rail=efi_pix`.
 - `POST /api/mobile/nfc/provision`: emite token opaco `nfc1...` usando JWT mobile. O app nao carrega API key `sk_live`.
 - `POST /api/nfc/authorize`: usado pelo leitor/terminal ChainFX para autorizar valor BRL.
 - `POST /api/nfc/authorizations/{id}/capture`: conclui a venda e consome o saldo travado.
@@ -398,6 +400,8 @@ Arquivos principais:
 - `migrations/020_nfc_closed_loop.sql`: tabelas `nfc_tokens`, `nfc_wallet_balances`, `nfc_authorizations`.
 
 O backend Go e a fonte de verdade do protocolo e da autorizacao. O app mobile nativo implementa apenas o transporte HCE/NFC do sistema operacional e envia o token `nfc1...` definido pelo Go.
+
+Estado atual de prontidao: este trilho e ChainFX Tap proprio. Ele autoriza, trava e captura saldo no ledger interno `nfc_wallet_balances`; nao usa rede Visa/Mastercard. Para dinheiro real, conecte o ledger NFC a uma origem reconciliavel de saldo USDT confirmado e ao settlement Efi/PIX do recebedor.
 
 Variaveis:
 
