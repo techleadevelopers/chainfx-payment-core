@@ -46,3 +46,20 @@ func TestSettlementOperationIDRejectsInvalidInput(t *testing.T) {
 		t.Fatalf("expected invalid input error")
 	}
 }
+
+func TestTokenAmountRawUsesNetworkDecimals(t *testing.T) {
+	bsc, err := TokenAmountRaw("USDT", "BSC", "1.25")
+	if err != nil {
+		t.Fatalf("TokenAmountRaw BSC returned error: %v", err)
+	}
+	if bsc.String() != "1250000000000000000" {
+		t.Fatalf("unexpected BSC raw amount: %s", bsc)
+	}
+	polygon, err := TokenAmountRaw("USDT", "POLYGON", "1.25")
+	if err != nil {
+		t.Fatalf("TokenAmountRaw Polygon returned error: %v", err)
+	}
+	if polygon.String() != "1250000" {
+		t.Fatalf("unexpected Polygon raw amount: %s", polygon)
+	}
+}
