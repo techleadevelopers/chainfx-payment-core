@@ -127,10 +127,12 @@ Quando `KYC_ENGINE_PROVIDER_URL` está definido, `NewFromEnv` usa um provider HT
 Variáveis:
 
 ```text
-KYC_ENGINE_PROVIDER_URL=https://kyc-provider.internal/analyze
+KYC_ENGINE_PROVIDER_URL=https://kyc-provider.internal
 KYC_ENGINE_PROVIDER_API_KEY=...
 FACE_BIOMETRY_SECRET=...
 ```
+
+`KYC_ENGINE_PROVIDER_URL` aceita URL base ou URL completa com `/analyze`.
 
 Contrato enviado ao provider:
 
@@ -259,6 +261,14 @@ Ele consulta `/api/mobile/kyc/engine/metrics`, mede latência HTTP e salva um JS
 - p95 da engine;
 - máximo da engine;
 - amostras por execução.
+
+Teste direto do provider cloud:
+
+```powershell
+.\scripts\kyc_cloud_probe.ps1 -BaseUrl https://chainfx-biometry-engine-production.up.railway.app -ApiKey $env:KYC_ENGINE_PROVIDER_API_KEY
+```
+
+Esse probe valida `/health`, chama `/analyze`, mede latência HTTP e verifica se o provider retorna `embedding` e `embedding_hash`.
 
 ## Testes
 
