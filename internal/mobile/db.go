@@ -33,6 +33,22 @@ type mobileWalletToken struct {
 	UpdatedAt time.Time
 }
 
+type createMobileUserInput struct {
+	Email               string
+	PasswordHash        string
+	FullName            string
+	Phone               string
+	CPF                 string
+	BirthDate           string
+	AddressPostalCode   string
+	AddressStreet       string
+	AddressNumber       string
+	AddressNeighborhood string
+	AddressCity         string
+	AddressState        string
+	AddressCountry      string
+}
+
 // mobileDB wraps the existing DB to add mobile-specific queries.
 // Uses DB.SQL directly so we don't touch the existing database package.
 type mobileQueries struct {
@@ -45,13 +61,25 @@ func mobileDB(db *database.DB) *mobileQueries {
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 
-func (q *mobileQueries) CreateUser(ctx context.Context, email, passwordHash, fullName, phone string) (*models.User, error) {
-	email = strings.TrimSpace(strings.ToLower(email))
+func (q *mobileQueries) CreateUser(ctx context.Context, input createMobileUserInput) (*models.User, error) {
+	if err := q.ensureMobileMediaSchema(ctx); err != nil {
+		return nil, err
+	}
+	email := strings.TrimSpace(strings.ToLower(input.Email))
 	var id string
 	err := q.sql.QueryRowContext(ctx, `
-                INSERT INTO users (email, password_hash, full_name, phone)
-                VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''))
-                RETURNING id`, email, passwordHash, fullName, phone).Scan(&id)
+                INSERT INTO users
+                  (email, password_hash, full_name, phone, cpf, birth_date,
+                   address_postal_code, address_street, address_number,
+                   address_neighborhood, address_city, address_state, address_country)
+                VALUES
+                  ($1, $2, NULLIF($3,''), NULLIF($4,''), NULLIF($5,''), NULLIF($6,''),
+                   NULLIF($7,''), NULLIF($8,''), NULLIF($9,''),
+                   NULLIF($10,''), NULLIF($11,''), NULLIF($12,''), NULLIF($13,''))
+                RETURNING id`,
+		email, input.PasswordHash, input.FullName, input.Phone, input.CPF, input.BirthDate,
+		input.AddressPostalCode, input.AddressStreet, input.AddressNumber,
+		input.AddressNeighborhood, input.AddressCity, input.AddressState, firstNonEmptyStr(input.AddressCountry, "BR")).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +90,9 @@ func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*mode
 	_ = q.ensureMobileMediaSchema(ctx)
 	email = strings.TrimSpace(strings.ToLower(email))
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
-                SELECT id,email,phone,full_name,avatar_url,password_hash,wallet_address,pix_key,
+                SELECT id,email,phone,full_name,cpf,birth_date,
+                       address_postal_code,address_street,address_number,address_neighborhood,address_city,address_state,address_country,
+                       avatar_url,password_hash,wallet_address,pix_key,
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
                 FROM users WHERE lower(email)=lower($1) AND deleted_at IS NULL`, email))
@@ -71,7 +101,9 @@ func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*mode
 func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.User, error) {
 	_ = q.ensureMobileMediaSchema(ctx)
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
-                SELECT id,email,phone,full_name,avatar_url,password_hash,wallet_address,pix_key,
+                SELECT id,email,phone,full_name,cpf,birth_date,
+                       address_postal_code,address_street,address_number,address_neighborhood,address_city,address_state,address_country,
+                       avatar_url,password_hash,wallet_address,pix_key,
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
                 FROM users WHERE id=$1 AND deleted_at IS NULL`, id))
@@ -80,7 +112,9 @@ func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.Use
 func (q *mobileQueries) scanUser(row *sql.Row) (*models.User, error) {
 	u := &models.User{}
 	err := row.Scan(
-		&u.ID, &u.Email, &u.Phone, &u.FullName, &u.AvatarURL,
+		&u.ID, &u.Email, &u.Phone, &u.FullName, &u.CPF, &u.BirthDate,
+		&u.AddressPostalCode, &u.AddressStreet, &u.AddressNumber, &u.AddressNeighborhood, &u.AddressCity, &u.AddressState, &u.AddressCountry,
+		&u.AvatarURL,
 		&u.PasswordHash, &u.WalletAddress, &u.PixKey, &u.KYCStatus, &u.KYCDocuments,
 		&u.PinHash, &u.BiometryEnabled, &u.TwoFactorEnabled,
 		&u.TwoFactorSecret, &u.RefreshTokenHash,
@@ -95,6 +129,21 @@ func (q *mobileQueries) scanUser(row *sql.Row) (*models.User, error) {
 func (q *mobileQueries) ensureMobileMediaSchema(ctx context.Context) error {
 	if _, err := q.sql.ExecContext(ctx, `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(2048)`); err != nil {
 		return err
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS birth_date TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS cpf TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_postal_code TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_street TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_number TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_neighborhood TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_city TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_state TEXT`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS address_country TEXT`,
+	} {
+		if _, err := q.sql.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 	if _, err := q.sql.ExecContext(ctx, `ALTER TABLE kyc_requests ADD COLUMN IF NOT EXISTS document_back_url VARCHAR(2048)`); err != nil {
 		return err
