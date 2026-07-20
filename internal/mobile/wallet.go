@@ -1,10 +1,19 @@
 package mobile
 
 import (
+	"context"
+	"encoding/hex"
+	"fmt"
+	"math"
+	"math/big"
 	"net/http"
 	"strings"
+	"time"
+
+	rpcpool "payment-gateway/internal/rpc"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
@@ -25,15 +34,90 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 		walletAddr = *user.WalletAddress
 	}
 	price := mobileAssetPriceBRL(s.PriceCache(), "USDT")
+	usdtAmount, bnbAmount := s.mobileOnchainWalletBalances(r.Context(), walletAddr)
+	usdtValueBRL := usdtAmount * price
 	writeJSON(w, http.StatusOK, map[string]any{
 		"wallet_address": walletAddr,
 		"balances": []map[string]any{
-			{"symbol": "USDT", "network": "BSC", "amount": 0, "value_brl": 0},
-			{"symbol": "BNB", "network": "BSC", "amount": 0, "value_brl": 0},
+			{"symbol": "USDT", "network": "BSC", "amount": usdtAmount, "value_brl": usdtValueBRL},
+			{"symbol": "BNB", "network": "BSC", "amount": bnbAmount, "value_brl": 0},
 		},
-		"total_brl":  0,
+		"total_brl":  usdtValueBRL,
 		"price_usdt": price,
 	})
+}
+
+func (s *Server) mobileOnchainWalletBalances(ctx context.Context, walletAddr string) (usdtAmount, bnbAmount float64) {
+	if s == nil || s.cfg == nil || strings.TrimSpace(walletAddr) == "" || !common.IsHexAddress(walletAddr) {
+		return 0, 0
+	}
+	rpcURLs := strings.TrimSpace(s.cfg.BscRpcUrls)
+	usdtContract := strings.TrimSpace(s.cfg.BscUsdtContract)
+	if rpcURLs == "" {
+		return 0, 0
+	}
+	balCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	pool, err := rpcpool.NewPool(rpcURLs)
+	if err != nil {
+		return 0, 0
+	}
+	wallet := common.HexToAddress(walletAddr)
+	if native, err := pool.BalanceAt(balCtx, wallet); err == nil && native != nil {
+		bnbAmount = bigIntToFloat(native, 18)
+	}
+	if usdtContract != "" && common.IsHexAddress(usdtContract) {
+		if raw, err := mobileERC20BalanceOf(balCtx, pool, wallet, common.HexToAddress(usdtContract)); err == nil && raw != nil {
+			usdtAmount = bigIntToFloat(raw, 18)
+		}
+	}
+	return usdtAmount, bnbAmount
+}
+
+func mobileERC20BalanceOf(ctx context.Context, pool *rpcpool.Pool, wallet, token common.Address) (*big.Int, error) {
+	var callData [36]byte
+	selector, _ := hex.DecodeString("70a08231")
+	copy(callData[:4], selector)
+	copy(callData[16:], wallet.Bytes())
+
+	var result []byte
+	err := pool.Do(ctx, func(c *ethclient.Client) error {
+		msg := map[string]string{
+			"to":   token.Hex(),
+			"data": "0x" + hex.EncodeToString(callData[:]),
+		}
+		var raw string
+		if err := c.Client().CallContext(ctx, &raw, "eth_call", msg, "latest"); err != nil {
+			return err
+		}
+		raw = strings.TrimPrefix(raw, "0x")
+		if raw == "" {
+			result = big.NewInt(0).Bytes()
+			return nil
+		}
+		decoded, err := hex.DecodeString(raw)
+		if err != nil {
+			return fmt.Errorf("decode balanceOf response: %w", err)
+		}
+		result = decoded
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return big.NewInt(0), nil
+	}
+	return new(big.Int).SetBytes(result), nil
+}
+
+func bigIntToFloat(value *big.Int, decimals int) float64 {
+	if value == nil {
+		return 0
+	}
+	f, _ := new(big.Float).Quo(new(big.Float).SetInt(value), big.NewFloat(math.Pow10(decimals))).Float64()
+	return f
 }
 
 func (s *Server) handleWalletTokens(w http.ResponseWriter, r *http.Request) {
