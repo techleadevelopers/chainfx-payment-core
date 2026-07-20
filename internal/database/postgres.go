@@ -2622,6 +2622,9 @@ CREATE TABLE IF NOT EXISTS nfc_authorizations (
   terminal_id TEXT NOT NULL,
   external_ref TEXT,
   amount_brl_minor BIGINT NOT NULL CHECK (amount_brl_minor > 0),
+  fee_brl_minor BIGINT NOT NULL DEFAULT 0 CHECK (fee_brl_minor >= 0),
+  total_brl_minor BIGINT NOT NULL DEFAULT 0 CHECK (total_brl_minor >= 0),
+  fee_bps INT NOT NULL DEFAULT 0 CHECK (fee_bps >= 0),
   usdt_rate NUMERIC(20,8) NOT NULL,
   required_usdt_micro BIGINT NOT NULL CHECK (required_usdt_micro > 0),
   status TEXT NOT NULL CHECK (status IN ('approved','declined','requires_funding','reversed','captured','expired')),
@@ -2638,6 +2641,10 @@ ALTER TABLE nfc_authorizations DROP CONSTRAINT IF EXISTS nfc_authorizations_stat
 ALTER TABLE nfc_authorizations ADD CONSTRAINT nfc_authorizations_status_check
   CHECK (status IN ('approved','declined','requires_funding','reversed','captured','expired'));
 ALTER TABLE nfc_authorizations ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ;
+ALTER TABLE nfc_authorizations ADD COLUMN IF NOT EXISTS fee_brl_minor BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE nfc_authorizations ADD COLUMN IF NOT EXISTS total_brl_minor BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE nfc_authorizations ADD COLUMN IF NOT EXISTS fee_bps INT NOT NULL DEFAULT 0;
+UPDATE nfc_authorizations SET total_brl_minor = amount_brl_minor WHERE total_brl_minor = 0;
 ALTER TABLE nfc_authorizations DROP CONSTRAINT IF EXISTS nfc_authorizations_idempotency_key_key;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_nfc_auth_terminal_idempotency ON nfc_authorizations(terminal_id, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_nfc_auth_wallet_created ON nfc_authorizations(LOWER(wallet_address), created_at DESC);
