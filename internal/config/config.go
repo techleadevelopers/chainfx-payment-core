@@ -153,6 +153,8 @@ type Config struct {
 	NFCPriceMaxAgeSec  int
 	NFCFeeBps          int
 	NFCSettlementMode  string
+	NFCEfiMinBufferBRL float64
+	NFCEfiBalanceBRL   float64
 
 	// EIP-712 typed intents for MCP/mobile/stablecoin rails.
 	EIP712DomainName        string
@@ -335,6 +337,8 @@ func LoadConfig() *Config {
 		NFCPriceMaxAgeSec:       getEnvAsInt("NFC_PRICE_MAX_AGE_SEC", 180),
 		NFCFeeBps:               getEnvAsInt("NFC_FEE_BPS", 400),
 		NFCSettlementMode:       strings.ToLower(getEnv("NFC_SETTLEMENT_MODE", "manual")),
+		NFCEfiMinBufferBRL:      getEnvAsFloat("NFC_EFI_MIN_BUFFER_BRL", 10000),
+		NFCEfiBalanceBRL:        getEnvAsFloat("NFC_EFI_BALANCE_BRL", 0),
 		EIP712DomainName:        getEnv("EIP712_DOMAIN_NAME", "ChainFX"),
 		EIP712DomainVersion:     getEnv("EIP712_DOMAIN_VERSION", "1"),
 		EIP712ChainID:           int64(getEnvAsInt("EIP712_CHAIN_ID", 56)),
