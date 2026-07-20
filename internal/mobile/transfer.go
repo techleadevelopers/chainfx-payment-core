@@ -153,6 +153,101 @@ func (s *Server) handleWalletTransfer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleWalletTransferQuote(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	user, err := mobileDB(s.db).GetUserByID(r.Context(), uid)
+	if err != nil || user == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "usuario nao encontrado"})
+		return
+	}
+	user, err = s.ensureUserWallet(r.Context(), user)
+	if err != nil || user.WalletAddress == nil || strings.TrimSpace(*user.WalletAddress) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "wallet do usuario nao registrada"})
+		return
+	}
+	var req struct {
+		To      string `json:"to"`
+		Amount  string `json:"amount"`
+		Asset   string `json:"asset"`
+		Network string `json:"network"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "payload invalido"})
+		return
+	}
+	to := strings.TrimSpace(req.To)
+	if !common.IsHexAddress(to) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "to deve ser um endereco EVM valido"})
+		return
+	}
+	asset := strings.ToUpper(strings.TrimSpace(req.Asset))
+	if asset == "" {
+		asset = "USDT"
+	}
+	network := normalizeMobileTransferNetwork(req.Network)
+	if network == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "network deve ser BSC ou POLYGON"})
+		return
+	}
+	token, decimals, chainID, err := s.mobileTransferToken(asset, network)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	rawAmount, err := parseTokenAmount(req.Amount, decimals)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	rpcURL := s.mobileTransferRPCURL(network)
+	if rpcURL == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": network + " RPC nao configurado para cotacao de transferencia"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "falha ao conectar RPC " + network})
+		return
+	}
+	defer client.Close()
+	from := common.HexToAddress(*user.WalletAddress)
+	recipient := common.HexToAddress(to)
+	tokenAddress := common.HexToAddress(token)
+	data := common.FromHex(erc20TransferCalldata(recipient, rawAmount))
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "falha ao estimar gas price"})
+		return
+	}
+	gasLimit, err := client.EstimateGas(ctx, ethereum.CallMsg{From: from, To: &tokenAddress, Value: big.NewInt(0), Data: data})
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "falha ao estimar gas"})
+		return
+	}
+	if gasLimit < 65_000 {
+		gasLimit = 65_000
+	}
+	gasLimitWithBuffer := gasLimit + gasLimit/5
+	feeWei := new(big.Int).Mul(new(big.Int).SetUint64(gasLimitWithBuffer), gasPrice)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"asset":                     asset,
+		"network":                   network,
+		"chainId":                   chainID,
+		"from":                      from.Hex(),
+		"recipient":                 recipient.Hex(),
+		"token_contract":            tokenAddress.Hex(),
+		"amount":                    req.Amount,
+		"amount_raw":                rawAmount.String(),
+		"decimals":                  decimals,
+		"gas_limit":                 gasLimitWithBuffer,
+		"gas_price_wei":             gasPrice.String(),
+		"estimated_network_fee_wei": feeWei.String(),
+		"requires_pin":              user.PinHash != nil && strings.TrimSpace(*user.PinHash) != "",
+	})
+}
+
 func (s *Server) sendCustodialMobileERC20Transfer(ctx context.Context, encryptedPrivateKey, expectedFrom string, recipient, token common.Address, amount *big.Int, network string, expectedChainID int64) (string, error) {
 	codec, err := privacy.New(s.mobileWalletEncryptionSecret())
 	if err != nil {
