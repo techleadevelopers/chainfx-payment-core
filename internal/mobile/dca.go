@@ -101,10 +101,13 @@ func (s *Server) handleDCAStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":             strategy.ID,
-		"active":         strategy.Active,
-		"total_invested": strategy.TotalInvested,
-		"total_tokens":   strategy.TotalTokens,
-		"next_execution": strategy.NextExecution,
+		"id":                strategy.ID,
+		"active":            strategy.Active,
+		"total_invested":    strategy.TotalInvested,
+		"total_tokens":      strategy.TotalTokens,
+		"next_execution":    strategy.NextExecution,
+		"current_price_brl": mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol),
+		"current_value_brl": strategy.TotalTokens * mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol),
+		"pnl_brl":           strategy.TotalTokens*mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol) - strategy.TotalInvested,
 	})
 }
