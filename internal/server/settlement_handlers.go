@@ -322,10 +322,10 @@ func (s *Server) handleEfiPixSendWebhook(w http.ResponseWriter, r *http.Request)
 		req.Status = "SUBMITTED"
 	}
 	duplicate, settlement, err := s.db.ApplyMerchantSettlementProviderEvent(r.Context(), "efi", req.IDEnvio, req.E2EID, req.Status, map[string]any{
-		"source":   "webhook",
-		"idEnvio":  req.IDEnvio,
-		"e2eId":    req.E2EID,
-		"status":   req.Status,
+		"source":    "webhook",
+		"idEnvio":   req.IDEnvio,
+		"e2eId":     req.E2EID,
+		"status":    req.Status,
 		"requestId": requestID(r),
 	})
 	if err != nil {
