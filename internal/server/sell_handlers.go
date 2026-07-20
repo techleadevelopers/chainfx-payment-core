@@ -29,6 +29,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		PixCpf       string  `json:"pixCpf"`
 		PixPhone     string  `json:"pixPhone"`
 		Email        string  `json:"email"`
+		RateLocked   float64 `json:"rateLocked"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON inválido"})
@@ -40,8 +41,8 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	network := normalizeSellNetwork(defaultString(req.Network, "BSC"))
 	asset := strings.ToUpper(defaultString(req.Asset, "USDT"))
-	if asset != "USDT" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "somente pedidos USDT sao suportados no sell"})
+	if asset != "USDT" && asset != "BTC" && asset != "BNB" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset de sell nao suportado"})
 		return
 	}
 	if !s.sellNetworkEnabled(network) {
@@ -59,7 +60,10 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "endereco EVM invalido"})
 		return
 	}
-	rate := s.workers.PriceWorker.GetCurrentPrice()
+	rate := req.RateLocked
+	if rate <= 0 {
+		rate = s.workers.PriceWorker.GetCurrentPrice()
+	}
 	if rate <= 0 {
 		if req.AmountBRL > 0 && req.AmountUSDT > 0 {
 			rate = req.AmountBRL / req.AmountUSDT
