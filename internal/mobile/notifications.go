@@ -1,6 +1,7 @@
 package mobile
 
 import (
+	"database/sql"
 	"log/slog"
 	"net/http"
 )
@@ -15,6 +16,23 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": list, "count": len(list)})
+}
+
+// handleGetNotification — GET /api/mobile/notifications/{id}
+func (s *Server) handleGetNotification(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	id := r.PathValue("id")
+	notification, err := mobileDB(s.db).GetNotification(r.Context(), uid, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "notificacao nao encontrada"})
+			return
+		}
+		slog.Error("erro interno", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notification": notification})
 }
 
 // handleMarkNotificationsRead — PUT /api/mobile/notifications/read
