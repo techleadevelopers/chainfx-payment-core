@@ -211,6 +211,57 @@ func (s *Server) writeDegradedMobileBuy(w http.ResponseWriter, r *http.Request, 
 
 // handleMobileSell — POST /api/mobile/order/sell
 // Delegates to existing POST /api/order handler.
+func (s *Server) handleMobileSellQuote(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AmountUSDT float64 `json:"amount_usdt"`
+		Asset      string  `json:"asset"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.AmountUSDT <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "amount_usdt obrigatorio"})
+		return
+	}
+	asset := strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
+	if asset != "USDT" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
+		return
+	}
+	marketRate := mobileAssetPriceBRL(s.PriceCache(), asset)
+	if marketRate <= 0 {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao indisponivel"})
+		return
+	}
+	rate, payoutBRL, spreadBRL, spreadBps := s.mobileSellQuote(req.AmountUSDT, marketRate)
+	if s != nil && s.cfg != nil && (payoutBRL < s.cfg.OrderMinBrl || payoutBRL > s.cfg.OrderMaxBrl) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl),
+		})
+		return
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(s.mobileRateLockSec()) * time.Second)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"quote_id":      "sellq_" + strings.ReplaceAll(database.NewID(), "-", ""),
+		"side":          "sell",
+		"asset":         asset,
+		"fiat":          "BRL",
+		"amount_usdt":   req.AmountUSDT,
+		"cryptoAmount":  req.AmountUSDT,
+		"rate":          rate,
+		"market_rate":   roundRateLocal(marketRate),
+		"marketRate":    roundRateLocal(marketRate),
+		"estimated_brl": payoutBRL,
+		"amount_brl":    payoutBRL,
+		"fee_brl":       spreadBRL,
+		"feeFiat":       spreadBRL,
+		"net_brl":       payoutBRL,
+		"receive_brl":   payoutBRL,
+		"payoutFiat":    payoutBRL,
+		"totalFiat":     payoutBRL,
+		"spread_bps":    spreadBps,
+		"expires_at":    expiresAt,
+		"expiresAt":     expiresAt,
+	})
+}
+
 func (s *Server) handleMobileSell(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	var req struct {
@@ -462,6 +513,54 @@ func (s *Server) mobileBuyFee(amountBRL float64) (float64, map[string]any) {
 		"min_fee_brl":     minFee,
 		"total_fee_brl":   totalFee,
 	}
+}
+
+func (s *Server) mobileSellQuote(amountUSDT, marketRate float64) (sellRate, payoutBRL, spreadBRL float64, spreadBps int) {
+	spreadBps = s.mobileSellSpreadBps(amountUSDT, marketRate)
+	sellRate = roundRateLocal(marketRate * (1 - float64(spreadBps)/10000))
+	if sellRate < 0 {
+		sellRate = 0
+	}
+	payoutBRL = roundMoney(amountUSDT * sellRate)
+	marketValue := roundMoney(amountUSDT * marketRate)
+	spreadBRL = roundMoney(marketValue - payoutBRL)
+	if spreadBRL < 0 {
+		spreadBRL = 0
+	}
+	return sellRate, payoutBRL, spreadBRL, spreadBps
+}
+
+func (s *Server) mobileSellSpreadBps(amountUSDT, marketRate float64) int {
+	if s == nil || s.cfg == nil {
+		return 0
+	}
+	if s.cfg.SellUsdtBrlRate > 0 && marketRate > 0 {
+		spread := int(math.Round((1 - s.cfg.SellUsdtBrlRate/marketRate) * 10000))
+		if spread < 0 {
+			return 0
+		}
+		return spread
+	}
+	if s.cfg.SellRateBps > 0 {
+		spread := 10000 - s.cfg.SellRateBps
+		if spread < 0 {
+			return 0
+		}
+		return spread
+	}
+	minBps := s.cfg.SellSpreadMinBps
+	maxBps := s.cfg.SellSpreadMaxBps
+	if minBps < 0 {
+		minBps = 0
+	}
+	if maxBps < minBps {
+		maxBps = minBps
+	}
+	marketValue := amountUSDT * marketRate
+	if s.cfg.SellSpreadHighValueBrl > 0 && marketValue >= s.cfg.SellSpreadHighValueBrl {
+		return minBps
+	}
+	return maxBps
 }
 
 func mobileRequestID(r *http.Request) string {
