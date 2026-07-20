@@ -253,6 +253,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// ── Notifications ─────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/mobile/notifications", s.requireAuth(s.handleListNotifications))
+	mux.HandleFunc("GET /api/mobile/notifications/{id}", s.requireAuth(s.handleGetNotification))
 	mux.HandleFunc("PUT /api/mobile/notifications/read", s.requireAuth(s.handleMarkNotificationsRead))
 	mux.HandleFunc("DELETE /api/mobile/notifications/{id}", s.requireAuth(s.handleDeleteNotification))
 	mux.HandleFunc("POST /api/mobile/notifications/token", s.requireAuth(s.handleRegisterPushToken))
