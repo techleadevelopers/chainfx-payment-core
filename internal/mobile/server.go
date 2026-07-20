@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"payment-gateway/internal/config"
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/metrics"
 	"payment-gateway/internal/models"
 	"payment-gateway/internal/workers"
 )
@@ -96,11 +98,45 @@ func (s *Server) Wrap(existing http.Handler) http.Handler {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			mux.ServeHTTP(w, r)
+			start := time.Now()
+			rec := &mobileStatusCaptureWriter{ResponseWriter: w}
+			mux.ServeHTTP(rec, r)
+			status := rec.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			metrics.ObserveHTTPRequest(r.Method, metrics.RoutePattern(r.Method, r.URL.Path, r.Pattern), status, time.Since(start))
 			return
 		}
 		existing.ServeHTTP(w, r)
 	})
+}
+
+type mobileStatusCaptureWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *mobileStatusCaptureWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *mobileStatusCaptureWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *mobileStatusCaptureWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *mobileStatusCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (s *Server) applyCORS(w http.ResponseWriter, r *http.Request) {
