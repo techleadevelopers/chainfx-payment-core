@@ -231,6 +231,14 @@ func (s *Server) handleWalletTransferQuote(w http.ResponseWriter, r *http.Reques
 	}
 	gasLimitWithBuffer := gasLimit + gasLimit/5
 	feeWei := new(big.Int).Mul(new(big.Int).SetUint64(gasLimitWithBuffer), gasPrice)
+	feeNative := bigIntToFloat(feeWei, 18)
+	nativeSymbol := mobileTransferNativeSymbol(network)
+	feeBRL := 0.0
+	if nativeSymbol != "" {
+		if nativePrice := mobileAssetPriceBRL(s.PriceCache(), nativeSymbol); nativePrice > 0 {
+			feeBRL = feeNative * nativePrice
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"asset":                     asset,
 		"network":                   network,
@@ -244,6 +252,9 @@ func (s *Server) handleWalletTransferQuote(w http.ResponseWriter, r *http.Reques
 		"gas_limit":                 gasLimitWithBuffer,
 		"gas_price_wei":             gasPrice.String(),
 		"estimated_network_fee_wei": feeWei.String(),
+		"estimated_network_fee":     feeNative,
+		"network_fee_symbol":        nativeSymbol,
+		"estimated_fee_brl":         feeBRL,
 		"requires_pin":              user.PinHash != nil && strings.TrimSpace(*user.PinHash) != "",
 	})
 }
@@ -380,6 +391,17 @@ func (s *Server) mobileTransferRPCURL(network string) string {
 		return firstCSVValue(s.cfg.PolygonRpcUrls)
 	default:
 		return firstCSVValue(s.cfg.BscRpcUrls)
+	}
+}
+
+func mobileTransferNativeSymbol(network string) string {
+	switch network {
+	case "POLYGON":
+		return "MATIC"
+	case "BSC":
+		return "BNB"
+	default:
+		return ""
 	}
 }
 
