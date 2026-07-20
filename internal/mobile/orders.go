@@ -541,6 +541,14 @@ func (s *Server) handleMobileSwap(w http.ResponseWriter, r *http.Request) {
 // handleMobileGetOrder — GET /api/mobile/order/{id}
 func (s *Server) handleMobileGetOrder(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	uid := userIDFromCtx(r)
+	if buy, err := mobileDB(s.db).GetBuyOrderByUser(r.Context(), id, uid); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	} else if buy != nil {
+		writeJSON(w, http.StatusOK, buy)
+		return
+	}
 	resp, err := forwardToInternal(r, "GET", s.internalBase(r)+"/api/order/"+id, nil, s.internalAPIKey())
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
