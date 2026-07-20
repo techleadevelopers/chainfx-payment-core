@@ -23,6 +23,13 @@ const (
 	NFCStatusExpired         = "expired"
 )
 
+const (
+	MerchantSettlementStatusPending   = "PENDING"
+	MerchantSettlementStatusSubmitted = "SUBMITTED"
+	MerchantSettlementStatusConfirmed = "CONFIRMED"
+	MerchantSettlementStatusFailed    = "FAILED"
+)
+
 type NFCTokenInput struct {
 	TokenID   string
 	TokenHash string
@@ -80,6 +87,38 @@ type NFCAuthorization struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	Idempotent      bool       `json:"idempotent,omitempty"`
+}
+
+type MerchantSettlement struct {
+	ID                string     `json:"id"`
+	MerchantID        string     `json:"merchant_id"`
+	TerminalID        string     `json:"terminal_id"`
+	AuthorizationID   string     `json:"authorization_id"`
+	CaptureID         string     `json:"capture_id"`
+	AmountBRLMinor    int64      `json:"amount_brl_minor"`
+	FeeBRLMinor       int64      `json:"fee_brl_minor"`
+	Provider          string     `json:"provider"`
+	Rail              string     `json:"rail"`
+	Status            string     `json:"status"`
+	ProviderReference string     `json:"provider_reference,omitempty"`
+	ProviderStatus    string     `json:"provider_status,omitempty"`
+	TXID              string     `json:"txid,omitempty"`
+	IdempotencyKey    string     `json:"idempotency_key"`
+	TargetPixKey      string     `json:"target_pix_key,omitempty"`
+	TargetDocument    string     `json:"target_document,omitempty"`
+	RetryCount        int        `json:"retry_count"`
+	NextRetryAt       time.Time  `json:"next_retry_at"`
+	ErrorMessage      string     `json:"error_message,omitempty"`
+	SubmittedAt       *time.Time `json:"submitted_at,omitempty"`
+	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
+	FailedAt          *time.Time `json:"failed_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+type NFCCaptureResult struct {
+	Authorization *NFCAuthorization   `json:"authorization"`
+	Settlement    *MerchantSettlement `json:"settlement,omitempty"`
 }
 
 type NFCBalance struct {
@@ -360,8 +399,8 @@ WHERE id = $1`
 	return auth, err
 }
 
-func (db *DB) CaptureNFCAuthorization(ctx context.Context, id string) (*NFCAuthorization, error) {
-	return db.finishNFCAuthorization(ctx, id, NFCStatusCaptured)
+func (db *DB) CaptureNFCAuthorization(ctx context.Context, id string) (*NFCCaptureResult, error) {
+	return db.captureNFCAuthorization(ctx, id)
 }
 
 func (db *DB) ReverseNFCAuthorization(ctx context.Context, id string) (*NFCAuthorization, error) {
@@ -509,6 +548,263 @@ WHERE id=$1 AND status='approved'`, timestampColumn)
 		return nil, fmt.Errorf("nfc: commit %s: %w", finalStatus, err)
 	}
 	return db.GetNFCAuthorization(ctx, id)
+}
+
+func (db *DB) captureNFCAuthorization(ctx context.Context, id string) (*NFCCaptureResult, error) {
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("nfc: begin capture tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	auth, err := txGetNFCAuthorizationByID(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if auth == nil {
+		return nil, nil
+	}
+	if auth.Status == NFCStatusCaptured {
+		settlement, err := txGetMerchantSettlementByAuthorization(ctx, tx, auth.ID)
+		if err != nil {
+			return nil, err
+		}
+		if settlement == nil {
+			settlement, err = txCreateMerchantSettlementForCapture(ctx, tx, auth)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return &NFCCaptureResult{Authorization: auth, Settlement: settlement}, tx.Commit()
+	}
+	if auth.Status != NFCStatusApproved {
+		return nil, fmt.Errorf("nfc: authorization %s is %s, not approved", id, auth.Status)
+	}
+
+	balanceResult, err := tx.ExecContext(ctx, `
+UPDATE nfc_wallet_balances
+SET locked_usdt_micro = locked_usdt_micro - $3,
+    updated_at = NOW()
+WHERE wallet_address = $1 AND network = $2 AND asset = 'USDT'
+  AND locked_usdt_micro >= $3`,
+		strings.ToLower(auth.Wallet), normalizeNFCNetwork(auth.Network), auth.RequiredUSDTMic)
+	if err != nil {
+		return nil, fmt.Errorf("nfc: update balance for capture: %w", err)
+	}
+	if rows, err := balanceResult.RowsAffected(); err != nil {
+		return nil, fmt.Errorf("nfc: verify balance update for capture: %w", err)
+	} else if rows != 1 {
+		return nil, fmt.Errorf("nfc: authorization %s has no matching locked balance", id)
+	}
+
+	authResult, err := tx.ExecContext(ctx, `
+UPDATE nfc_authorizations
+SET status='captured', captured_at=NOW(), updated_at=NOW()
+WHERE id=$1 AND status='approved'`, auth.ID)
+	if err != nil {
+		return nil, fmt.Errorf("nfc: mark capture: %w", err)
+	}
+	if rows, err := authResult.RowsAffected(); err != nil {
+		return nil, fmt.Errorf("nfc: verify authorization update for capture: %w", err)
+	} else if rows != 1 {
+		return nil, fmt.Errorf("nfc: authorization %s changed before capture", id)
+	}
+
+	settlement, err := txCreateMerchantSettlementForCapture(ctx, tx, auth)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("nfc: commit capture: %w", err)
+	}
+	captured, err := db.GetNFCAuthorization(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &NFCCaptureResult{Authorization: captured, Settlement: settlement}, nil
+}
+
+func txCreateMerchantSettlementForCapture(ctx context.Context, tx *sql.Tx, auth *NFCAuthorization) (*MerchantSettlement, error) {
+	if auth == nil {
+		return nil, fmt.Errorf("nfc settlement: authorization is nil")
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO nfc_merchants (id, display_name, status)
+VALUES ($1,$1,'active')
+ON CONFLICT (id) DO NOTHING`, auth.MerchantID); err != nil {
+		return nil, fmt.Errorf("nfc settlement: ensure merchant: %w", err)
+	}
+	var pixKey, document sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+SELECT settlement_pix_key, settlement_document
+FROM nfc_merchants
+WHERE id = $1
+FOR UPDATE`, auth.MerchantID).Scan(&pixKey, &document); err != nil {
+		return nil, fmt.Errorf("nfc settlement: merchant lookup: %w", err)
+	}
+	settlementID := "nfc_settle_" + NewAccessToken()[:24]
+	idempotencyKey := settlementID
+	const q = `
+INSERT INTO merchant_settlements
+  (id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+   provider, rail, status, idempotency_key, target_pix_key, target_document)
+VALUES ($1,$2,$3,$4,$5,$6,$7,'efi','pix_send','PENDING',$8,$9,$10)
+ON CONFLICT (authorization_id) DO UPDATE SET updated_at = merchant_settlements.updated_at
+RETURNING id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+          provider, rail, status, COALESCE(provider_reference,''), COALESCE(provider_status,''), COALESCE(txid,''),
+          idempotency_key, COALESCE(target_pix_key,''), COALESCE(target_document,''), retry_count, next_retry_at,
+          COALESCE(error_message,''), submitted_at, confirmed_at, failed_at, created_at, updated_at`
+	settlement, err := scanMerchantSettlement(tx.QueryRowContext(ctx, q,
+		settlementID, auth.MerchantID, auth.TerminalID, auth.ID, auth.ID, auth.AmountBRLMinor, auth.FeeBRLMinor,
+		idempotencyKey, pixKey, document,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("nfc settlement: create: %w", err)
+	}
+	return settlement, nil
+}
+
+func (db *DB) GetMerchantSettlement(ctx context.Context, id string) (*MerchantSettlement, error) {
+	const q = `
+SELECT id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+       provider, rail, status, COALESCE(provider_reference,''), COALESCE(provider_status,''), COALESCE(txid,''),
+       idempotency_key, COALESCE(target_pix_key,''), COALESCE(target_document,''), retry_count, next_retry_at,
+       COALESCE(error_message,''), submitted_at, confirmed_at, failed_at, created_at, updated_at
+FROM merchant_settlements
+WHERE id = $1`
+	settlement, err := scanMerchantSettlement(db.SQL.QueryRowContext(ctx, q, strings.TrimSpace(id)))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return settlement, err
+}
+
+func (db *DB) GetDueMerchantSettlements(ctx context.Context, limit int) ([]MerchantSettlement, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	const q = `
+SELECT id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+       provider, rail, status, COALESCE(provider_reference,''), COALESCE(provider_status,''), COALESCE(txid,''),
+       idempotency_key, COALESCE(target_pix_key,''), COALESCE(target_document,''), retry_count, next_retry_at,
+       COALESCE(error_message,''), submitted_at, confirmed_at, failed_at, created_at, updated_at
+FROM merchant_settlements
+WHERE status IN ('PENDING','SUBMITTED')
+  AND next_retry_at <= NOW()
+ORDER BY created_at
+LIMIT $1`
+	rows, err := db.SQL.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("nfc settlement: list due: %w", err)
+	}
+	defer rows.Close()
+	var out []MerchantSettlement
+	for rows.Next() {
+		settlement, err := scanMerchantSettlement(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *settlement)
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) ClaimMerchantSettlement(ctx context.Context, id string) (*MerchantSettlement, bool, error) {
+	const q = `
+UPDATE merchant_settlements
+SET status='SUBMITTED',
+    retry_count=retry_count+1,
+    submitted_at=COALESCE(submitted_at, NOW()),
+    updated_at=NOW()
+WHERE id = $1
+  AND status IN ('PENDING','SUBMITTED')
+  AND next_retry_at <= NOW()
+RETURNING id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+          provider, rail, status, COALESCE(provider_reference,''), COALESCE(provider_status,''), COALESCE(txid,''),
+          idempotency_key, COALESCE(target_pix_key,''), COALESCE(target_document,''), retry_count, next_retry_at,
+          COALESCE(error_message,''), submitted_at, confirmed_at, failed_at, created_at, updated_at`
+	settlement, err := scanMerchantSettlement(db.SQL.QueryRowContext(ctx, q, strings.TrimSpace(id)))
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return settlement, true, nil
+}
+
+func (db *DB) MarkMerchantSettlementConfirmed(ctx context.Context, id, providerReference, providerStatus, txid string) error {
+	_, err := db.SQL.ExecContext(ctx, `
+UPDATE merchant_settlements
+SET status='CONFIRMED',
+    provider_reference=$2,
+    provider_status=$3,
+    txid=$4,
+    error_message=NULL,
+    confirmed_at=NOW(),
+    updated_at=NOW()
+WHERE id=$1 AND status IN ('PENDING','SUBMITTED')`,
+		strings.TrimSpace(id), nullableString(strings.TrimSpace(providerReference)), nullableString(strings.TrimSpace(providerStatus)), nullableString(strings.TrimSpace(txid)))
+	return err
+}
+
+func (db *DB) MarkMerchantSettlementFailed(ctx context.Context, id, errMsg string, permanent bool) error {
+	status := MerchantSettlementStatusSubmitted
+	if permanent {
+		status = MerchantSettlementStatusFailed
+	}
+	_, err := db.SQL.ExecContext(ctx, `
+UPDATE merchant_settlements
+SET status=$2,
+    error_message=$3,
+    failed_at=CASE WHEN $2 = 'FAILED' THEN NOW() ELSE failed_at END,
+    next_retry_at=CASE
+      WHEN $2 = 'FAILED' THEN next_retry_at
+      ELSE NOW() + (LEAST(60, POWER(2, GREATEST(retry_count, 1)))::INT * INTERVAL '1 minute')
+    END,
+    updated_at=NOW()
+WHERE id=$1 AND status IN ('PENDING','SUBMITTED')`,
+		strings.TrimSpace(id), status, strings.TrimSpace(errMsg))
+	return err
+}
+
+func txGetMerchantSettlementByAuthorization(ctx context.Context, tx *sql.Tx, authorizationID string) (*MerchantSettlement, error) {
+	const q = `
+SELECT id, merchant_id, terminal_id, authorization_id, capture_id, amount_brl_minor, fee_brl_minor,
+       provider, rail, status, COALESCE(provider_reference,''), COALESCE(provider_status,''), COALESCE(txid,''),
+       idempotency_key, COALESCE(target_pix_key,''), COALESCE(target_document,''), retry_count, next_retry_at,
+       COALESCE(error_message,''), submitted_at, confirmed_at, failed_at, created_at, updated_at
+FROM merchant_settlements
+WHERE authorization_id = $1`
+	settlement, err := scanMerchantSettlement(tx.QueryRowContext(ctx, q, strings.TrimSpace(authorizationID)))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return settlement, err
+}
+
+func scanMerchantSettlement(row scanner) (*MerchantSettlement, error) {
+	var s MerchantSettlement
+	var submittedAt, confirmedAt, failedAt sql.NullTime
+	err := row.Scan(
+		&s.ID, &s.MerchantID, &s.TerminalID, &s.AuthorizationID, &s.CaptureID, &s.AmountBRLMinor, &s.FeeBRLMinor,
+		&s.Provider, &s.Rail, &s.Status, &s.ProviderReference, &s.ProviderStatus, &s.TXID,
+		&s.IdempotencyKey, &s.TargetPixKey, &s.TargetDocument, &s.RetryCount, &s.NextRetryAt,
+		&s.ErrorMessage, &submittedAt, &confirmedAt, &failedAt, &s.CreatedAt, &s.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if submittedAt.Valid {
+		s.SubmittedAt = &submittedAt.Time
+	}
+	if confirmedAt.Valid {
+		s.ConfirmedAt = &confirmedAt.Time
+	}
+	if failedAt.Valid {
+		s.FailedAt = &failedAt.Time
+	}
+	return &s, nil
 }
 
 func txInsertNFCAuthorization(ctx context.Context, tx *sql.Tx, in NFCAuthorizeInput, status, responseCode, reason string, holdExpires any) (*NFCAuthorization, bool, error) {
