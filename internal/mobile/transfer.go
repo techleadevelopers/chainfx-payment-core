@@ -236,9 +236,9 @@ func (s *Server) mobileTransferToken(asset, network string) (string, int, int, e
 			if s.cfg == nil || !common.IsHexAddress(s.cfg.BscUsdtContract) {
 				return "", 0, 0, fmt.Errorf("BSC USDT nao configurado")
 			}
-			return s.cfg.BscUsdtContract, 18, 56, nil
+			return s.cfg.BscUsdtContract, 18, s.mobileTransferChainID("BSC"), nil
 		case "USDC":
-			return bscUSDCContractMobile, 18, 56, nil
+			return bscUSDCContractMobile, 18, s.mobileTransferChainID("BSC"), nil
 		}
 	case "POLYGON":
 		switch asset {
@@ -247,12 +247,33 @@ func (s *Server) mobileTransferToken(asset, network string) (string, int, int, e
 			if s.cfg != nil && common.IsHexAddress(s.cfg.PolygonUsdtContract) {
 				token = s.cfg.PolygonUsdtContract
 			}
-			return token, 6, 137, nil
+			return token, 6, s.mobileTransferChainID("POLYGON"), nil
 		case "USDC":
-			return polygonUSDCContractMobile, 6, 137, nil
+			return polygonUSDCContractMobile, 6, s.mobileTransferChainID("POLYGON"), nil
 		}
 	}
 	return "", 0, 0, fmt.Errorf("asset/network nao suportado para transferencia mobile")
+}
+
+func (s *Server) mobileTransferChainID(network string) int {
+	if s == nil || s.cfg == nil {
+		if network == "POLYGON" {
+			return 137
+		}
+		return 56
+	}
+	switch network {
+	case "POLYGON":
+		if s.cfg.PolygonChainID > 0 {
+			return int(s.cfg.PolygonChainID)
+		}
+		return 137
+	default:
+		if s.cfg.BscChainID > 0 {
+			return int(s.cfg.BscChainID)
+		}
+		return 56
+	}
 }
 
 func (s *Server) mobileTransferRPCURL(network string) string {
