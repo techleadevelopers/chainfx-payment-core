@@ -43,6 +43,7 @@ func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 		MaxBRL   float64 `json:"max_amount_brl"`
 		FeeBPS   int     `json:"fee_bps"`
 		PriceBRL float64 `json:"price_brl,omitempty"`
+		Change24 float64 `json:"change_24h"`
 	}
 	out := make([]assetWithRate, 0)
 	for _, a := range assets {
@@ -56,6 +57,7 @@ func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 			FeeBPS:   a.FeeBPS,
 		}
 		row.PriceBRL = mobileAssetPriceBRL(pw, a.Symbol)
+		row.Change24 = mobileAssetChange24h(pw, a.Symbol)
 		out = append(out, row)
 	}
 	response := map[string]any{"assets": out, "count": len(out)}
@@ -71,7 +73,8 @@ func (s *Server) fallbackMobileAssets() []models.Asset {
 	}
 	return []models.Asset{
 		{Symbol: "USDT", Name: "Tether USD", Network: "BSC", ContractAddress: stringPtrOrNil(usdtContract), Decimals: 18, MinAmount: 10, MaxAmount: 50000, DailyLimit: 50000, MonthlyLimit: 500000, FeeBPS: 60, Active: true, CreatedAt: now},
-		{Symbol: "USDC", Name: "USD Coin", Network: "BSC", ContractAddress: stringPtrOrNil(bscUSDCContractMobile), Decimals: 18, MinAmount: 10, MaxAmount: 50000, DailyLimit: 50000, MonthlyLimit: 500000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "BTC", Name: "Bitcoin", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "ETH", Name: "Ethereum", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "BNB", Name: "BNB", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 10000, DailyLimit: 10000, MonthlyLimit: 100000, FeeBPS: 60, Active: true, CreatedAt: now},
 	}
 }
@@ -169,6 +172,7 @@ func (s *Server) handleGetAssetRate(w http.ResponseWriter, r *http.Request) {
 		"symbol":     symbol,
 		"price_brl":  priceBRL,
 		"price_usd":  priceUSD,
+		"change_24h": mobileAssetChange24h(pw, symbol),
 		"fee_bps":    asset.FeeBPS,
 		"min_amount": asset.MinAmount,
 		"max_amount": asset.MaxAmount,
@@ -196,8 +200,17 @@ func assetPriceInBRL(pw interface{ GetPrice(string) float64 }, symbol string) fl
 			return btcUSD * usdtBRL
 		}
 	case "ETH":
-		// ETH not directly tracked yet — return 0 until PriceWorker is extended
-		return 0
+		ethUSD := pw.GetPrice("ETHUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if ethUSD > 0 && usdtBRL > 0 {
+			return ethUSD * usdtBRL
+		}
+	case "BNB":
+		bnbUSD := pw.GetPrice("BNBUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if bnbUSD > 0 && usdtBRL > 0 {
+			return bnbUSD * usdtBRL
+		}
 	case "EURC":
 		usdtEUR := pw.GetPrice("USDTEUR")
 		usdtBRL := pw.GetPrice("BRL")
@@ -217,6 +230,10 @@ func assetPriceInUSD(pw interface{ GetPrice(string) float64 }, symbol string) fl
 		return 1
 	case "BTCB", "BTC":
 		return pw.GetPrice("BTCUSDT_SOURCE")
+	case "ETH":
+		return pw.GetPrice("ETHUSDT_SOURCE")
+	case "BNB":
+		return pw.GetPrice("BNBUSDT_SOURCE")
 	case "EURC":
 		if usdtEUR := pw.GetPrice("USDTEUR"); usdtEUR > 0 {
 			return 1 / usdtEUR
@@ -253,3 +270,20 @@ func mobileAssetPriceUSD(pw interface{ GetPrice(string) float64 }, symbol string
 	}
 	return 0
 }
+func mobileAssetChange24h(pw interface{ GetPrice(string) float64 }, symbol string) float64 {
+	if pw == nil {
+		return 0
+	}
+	switch strings.ToUpper(symbol) {
+	case "USDT", "USDC", "BUSD":
+		return pw.GetPrice("USDT_CHANGE24H")
+	case "BTCB", "BTC":
+		return pw.GetPrice("BTC_CHANGE24H")
+	case "ETH":
+		return pw.GetPrice("ETH_CHANGE24H")
+	case "BNB":
+		return pw.GetPrice("BNB_CHANGE24H")
+	}
+	return 0
+}
+
