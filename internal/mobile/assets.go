@@ -31,6 +31,7 @@ func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 	if len(assets) == 0 {
 		assets = s.fallbackMobileAssets()
 	}
+	assets = s.ensureCoreMobileAssets(assets)
 
 	// Enrich with live price if PriceWorker available
 	pw := s.PriceCache()
@@ -77,6 +78,24 @@ func (s *Server) fallbackMobileAssets() []models.Asset {
 		{Symbol: "ETH", Name: "Ethereum", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "BNB", Name: "BNB", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 10000, DailyLimit: 10000, MonthlyLimit: 100000, FeeBPS: 60, Active: true, CreatedAt: now},
 	}
+}
+
+func (s *Server) ensureCoreMobileAssets(assets []models.Asset) []models.Asset {
+	seen := make(map[string]bool, len(assets))
+	for i := range assets {
+		symbol := strings.ToUpper(strings.TrimSpace(assets[i].Symbol))
+		assets[i].Symbol = symbol
+		if symbol != "" {
+			seen[symbol] = true
+		}
+	}
+	for _, fallback := range s.fallbackMobileAssets() {
+		if !seen[fallback.Symbol] {
+			assets = append(assets, fallback)
+			seen[fallback.Symbol] = true
+		}
+	}
+	return assets
 }
 
 func stringPtrOrNil(value string) *string {
