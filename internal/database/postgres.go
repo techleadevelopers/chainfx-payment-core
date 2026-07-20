@@ -2709,6 +2709,23 @@ CREATE TABLE IF NOT EXISTS merchant_settlement_provider_events (
 CREATE INDEX IF NOT EXISTS idx_merchant_settlement_provider_events_settlement
   ON merchant_settlement_provider_events(settlement_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS nfc_settlement_reconciliation_anomalies (
+  id BIGSERIAL PRIMARY KEY,
+  anomaly_key TEXT NOT NULL UNIQUE,
+  anomaly_type TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  authorization_id TEXT,
+  settlement_id TEXT,
+  merchant_id TEXT,
+  details JSONB,
+  status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN','RESOLVED')),
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_nfc_settlement_anomalies_status
+  ON nfc_settlement_reconciliation_anomalies(status, last_seen_at DESC);
+
 -- M2M Agent Pay supports shared configured deposit addresses. Older hardening
 -- deployments created a unique pending-address index that blocks concurrent
 -- PIX/card intents when all deposits route to the same treasury address.
