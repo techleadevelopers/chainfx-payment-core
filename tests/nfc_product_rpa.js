@@ -39,6 +39,7 @@ const FUND_USDT = process.env.NFC_RPA_FUND_USDT || "100.000000";
 const ITERATIONS = intEnv("NFC_RPA_ITERATIONS", 5);
 const TIMEOUT_MS = intEnv("NFC_RPA_TIMEOUT_MS", 5000);
 const REPORT_DIR = process.env.NFC_RPA_REPORT_DIR || "tests";
+const EXPECTED_FEE_BPS = intEnv("NFC_RPA_EXPECTED_FEE_BPS", 400);
 
 const results = [];
 const latencies = [];
@@ -118,6 +119,7 @@ async function mutatingProductFlow() {
   const idemA = "nfc-rpa-capture-" + randomID();
   const authA = await authorize(tokenA, idemA, AMOUNT_BRL);
   expectStatus("authorize approved/accepted", authA, [200, 202]);
+  validateFinancialBreakdown("authorize financial breakdown", authA.body, AMOUNT_BRL, EXPECTED_FEE_BPS);
   const authorizationID = authA.body && authA.body.authorization_id;
   if (!authorizationID) throw new Error(`authorize did not return authorization_id: ${authA.bodyText}`);
 
@@ -149,6 +151,42 @@ async function mutatingProductFlow() {
     Authorization: "Bearer wrong-terminal-key",
   });
   expectStatus("wrong terminal key cannot read auth", wrongKey, [401, 403]);
+}
+
+function validateFinancialBreakdown(name, body, amountBRL, feeBps) {
+  if (!body || typeof body !== "object") {
+    addFail(name, "missing authorization body");
+    return;
+  }
+  const amount = Number(amountBRL);
+  const merchantAmount = Number(body.merchant_amount_brl || body.amount_brl);
+  const fee = Number(body.chainfx_fee_brl || 0);
+  const total = Number(body.total_debit_brl || 0);
+  const expectedFee = round2(amount * feeBps / 10000);
+  const expectedTotal = round2(amount + expectedFee);
+  const ok =
+    near(merchantAmount, amount, 0.01) &&
+    near(fee, expectedFee, 0.01) &&
+    near(total, expectedTotal, 0.01) &&
+    Number(body.required_usdt) > 0;
+  addResult({
+    name,
+    category: "financial_invariant",
+    status: ok ? "pass" : "fail",
+    latencyMs: 0,
+    pass: ok,
+    expected: `merchant=${amount.toFixed(2)} fee=${expectedFee.toFixed(2)} total=${expectedTotal.toFixed(2)} required_usdt>0`,
+    observed: `merchant=${merchantAmount} fee=${fee} total=${total} required_usdt=${body.required_usdt}`,
+    detail: "NFC must hold compra + ChainFX fee in USDT while merchant settlement remains the purchase amount",
+  });
+}
+
+function round2(value) {
+  return Math.round(Number(value) * 100) / 100;
+}
+
+function near(a, b, tolerance) {
+  return Number.isFinite(a) && Math.abs(a - b) <= tolerance;
 }
 
 async function latencyBaseline() {
