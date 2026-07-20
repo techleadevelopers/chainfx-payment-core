@@ -46,6 +46,8 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		CardBrand      string         `json:"cardBrand"`
 		Installments   int            `json:"installments"`
 		BillingAddress map[string]any `json:"billingAddress"`
+		QuoteID        string         `json:"quoteId"`
+		RateLocked     float64        `json:"rateLocked"`
 		Card           struct {
 			PaymentToken   string         `json:"paymentToken"`
 			Brand          string         `json:"brand"`
@@ -58,8 +60,8 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	asset := strings.ToUpper(defaultString(req.Asset, "USDT"))
-	if asset != "USDT" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nÃƒÂ£o suportado nesta fase (apenas USDT)"})
+	if !buyAssetSupported(asset) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
 	deliveryNetwork := s.deliveryNetwork()
@@ -80,12 +82,15 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor fora dos limites (%.2f - %.2f BRL)", s.buyMinBRL(), s.cfg.OrderMaxBrl)})
 		return
 	}
-	marketRate := s.workers.PriceWorker.GetPrice(fiatCurrency)
+	marketRate := s.buyAssetMarketRate(fiatCurrency, asset)
 	if marketRate <= 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
 		return
 	}
-	rate := s.buyRate(marketRate)
+	rate := req.RateLocked
+	if rate <= 0 {
+		rate = s.buyRate(marketRate)
+	}
 	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
 	payout := amountFiat
 	if payout <= 0 {
