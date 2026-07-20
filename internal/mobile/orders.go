@@ -28,7 +28,7 @@ func (s *Server) handleMobileBuyQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	asset := strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
-	if !mobileSellAssetSupported(asset) {
+	if !mobileTradeAssetSupported(asset) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
@@ -40,10 +40,7 @@ func (s *Server) handleMobileBuyQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("valor maximo %.2f BRL", s.cfg.OrderMaxBrl)})
 		return
 	}
-	marketRate := 0.0
-	if pw := s.PriceCache(); pw != nil {
-		marketRate = pw.GetPrice("BRL")
-	}
+	marketRate := mobileAssetPriceBRL(s.PriceCache(), asset)
 	if marketRate <= 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao indisponivel"})
 		return
@@ -117,6 +114,10 @@ func (s *Server) handleMobileBuy(w http.ResponseWriter, r *http.Request) {
 		req.PaymentMethod = "pix"
 	}
 	req.Asset = strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
+	if !mobileTradeAssetSupported(req.Asset) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
+		return
+	}
 	claims, err := s.verifyMobileQuote(req.QuoteID, "buy", req.Asset, req.AmountBRL, time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "MOBILE_QUOTE_INVALID"})
@@ -207,10 +208,7 @@ func (s *Server) writeDegradedMobileBuy(w http.ResponseWriter, r *http.Request, 
 	if s != nil && s.cfg != nil && s.cfg.OrderMaxBrl > 0 && amountBRL > s.cfg.OrderMaxBrl {
 		return false
 	}
-	marketRate := 0.0
-	if pw := s.PriceCache(); pw != nil {
-		marketRate = pw.GetPrice("BRL")
-	}
+	marketRate := mobileAssetPriceBRL(s.PriceCache(), asset)
 	if marketRate <= 0 {
 		return false
 	}
@@ -333,7 +331,7 @@ func (s *Server) handleMobileSellQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	asset := strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
-	if asset != "USDT" {
+	if !mobileTradeAssetSupported(asset) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
@@ -403,7 +401,7 @@ func (s *Server) handleMobileSell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Asset = strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
-	if !mobileSellAssetSupported(req.Asset) {
+	if !mobileTradeAssetSupported(req.Asset) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
 		return
 	}
@@ -446,7 +444,7 @@ func (s *Server) handleMobileSell(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-func mobileSellAssetSupported(asset string) bool {
+func mobileTradeAssetSupported(asset string) bool {
 	switch strings.ToUpper(strings.TrimSpace(asset)) {
 	case "USDT", "BTC", "BNB":
 		return true
