@@ -470,11 +470,11 @@ func (db *DB) ExpireStaleSellOrders(ctx context.Context) (int, error) {
 	rows, err := db.SQL.QueryContext(ctx, `
 		UPDATE orders
 		   SET status = 'expirada',
-		       error = 'deposito nao identificado em ate 8 minutos; ordem expirada sem estorno automatico',
+		       error = 'deposito nao identificado dentro da janela de pagamento; ordem expirada sem estorno automatico',
 		       updated_at = now()
 		 WHERE status = 'aguardando_deposito'
 		   AND deposit_tx IS NULL
-		   AND created_at <= now() - interval '8 minutes'
+		   AND rate_lock_expires_at <= now()
 		RETURNING id`)
 	if err != nil {
 		return 0, err
@@ -494,8 +494,42 @@ func (db *DB) ExpireStaleSellOrders(ctx context.Context) (int, error) {
 	}
 	for _, id := range ids {
 		_ = db.AddEvent(ctx, id, "order.expirada", map[string]any{
-			"reason": "deposito nao identificado em ate 8 minutos",
+			"reason": "deposito nao identificado dentro da janela de pagamento",
 			"policy": "no_automatic_refund",
+		})
+	}
+	return len(ids), nil
+}
+
+func (db *DB) ExpireStaleBuyOrders(ctx context.Context) (int, error) {
+	rows, err := db.SQL.QueryContext(ctx, `
+		UPDATE buy_orders
+		   SET status = 'expirado',
+		       error = 'pagamento Pix nao identificado dentro da janela de pagamento',
+		       updated_at = now()
+		 WHERE status IN ('aguardando_pix','payment_provider_pending')
+		   AND paid_at IS NULL
+		   AND rate_lock_expires_at <= now()
+		RETURNING id`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range ids {
+		_ = db.AddBuyEvent(ctx, id, "buy.expirado", map[string]any{
+			"reason": "pagamento Pix nao identificado dentro da janela de pagamento",
 		})
 	}
 	return len(ids), nil
@@ -834,6 +868,7 @@ func (db *DB) ApplyBuyProviderWebhook(ctx context.Context, buyOrderID, providerI
                         delivered_at = CASE WHEN $2 IN ('enviado','delivered','confirmado') AND delivered_at IS NULL THEN now() ELSE delivered_at END,
                         updated_at = now()
                 WHERE id = $1
+                  AND NOT (status IN ('expirado','expirada','cancelado','cancelada','erro') AND $2 IN ('pago_fiat','pago_pix'))
                   AND NOT (status IN ('pago_fiat','pago_pix','enviando','pendente_confirmacao','enviado','delivered','confirmado') AND $2 LIKE 'aguardando_%')
                   AND NOT (status IN ('enviando','pendente_confirmacao','enviado','delivered','confirmado') AND $2 IN ('pago_fiat','pago_pix','erro'))`,
 		buyOrderID, status, txHashOut, providerPaymentID, errMsg)
