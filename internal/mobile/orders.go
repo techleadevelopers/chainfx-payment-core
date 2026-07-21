@@ -206,7 +206,7 @@ func (s *Server) handleMobileBuy(w http.ResponseWriter, r *http.Request) {
 			"address":   customerAddress,
 		},
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
 	internalReq := r.Clone(ctx)
 	resp, err := forwardToInternal(internalReq, "POST", s.internalBase(r)+"/api/buy", payload, s.internalAPIKey())
