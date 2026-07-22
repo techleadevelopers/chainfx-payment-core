@@ -88,7 +88,6 @@ func (q *mobileQueries) CreateUser(ctx context.Context, input createMobileUserIn
 }
 
 func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	_ = q.ensureMobileMediaSchema(ctx)
 	email = strings.TrimSpace(strings.ToLower(email))
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
                 SELECT id,email,phone,full_name,cpf,birth_date,
@@ -100,7 +99,6 @@ func (q *mobileQueries) GetUserByEmail(ctx context.Context, email string) (*mode
 }
 
 func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.User, error) {
-	_ = q.ensureMobileMediaSchema(ctx)
 	return q.scanUser(q.sql.QueryRowContext(ctx, `
                 SELECT id,email,phone,full_name,cpf,birth_date,
                        address_postal_code,address_street,address_number,address_neighborhood,address_city,address_state,address_country,
@@ -108,6 +106,55 @@ func (q *mobileQueries) GetUserByID(ctx context.Context, id string) (*models.Use
                        kyc_status,kyc_documents,pin_hash,biometry_enabled,two_factor_enabled,
                        two_factor_secret,refresh_token_hash,created_at,updated_at
                 FROM users WHERE id=$1 AND deleted_at IS NULL`, id))
+}
+
+// GetUserWalletAddress fetches only the wallet_address for the given user — used
+// by NFC handlers to avoid loading the full user row just for one field.
+func (q *mobileQueries) GetUserWalletAddress(ctx context.Context, userID string) (string, error) {
+	var addr *string
+	err := q.sql.QueryRowContext(ctx,
+		`SELECT wallet_address FROM users WHERE id=$1 AND deleted_at IS NULL`, userID).Scan(&addr)
+	if err != nil {
+		return "", err
+	}
+	if addr == nil {
+		return "", nil
+	}
+	return *addr, nil
+}
+
+// GetUserWalletAndName fetches wallet_address and full_name in a single query.
+// Used by NFC card handlers to avoid a full user row fetch and a separate name lookup.
+func (q *mobileQueries) GetUserWalletAndName(ctx context.Context, userID string) (addr, fullName string, err error) {
+	var addrPtr, namePtr *string
+	err = q.sql.QueryRowContext(ctx,
+		`SELECT wallet_address, full_name FROM users WHERE id=$1 AND deleted_at IS NULL`, userID).
+		Scan(&addrPtr, &namePtr)
+	if err != nil {
+		return "", "", err
+	}
+	if addrPtr != nil {
+		addr = *addrPtr
+	}
+	if namePtr != nil {
+		fullName = *namePtr
+	}
+	return addr, fullName, nil
+}
+
+// InitSchema runs all one-time DDL migrations for the mobile package.
+// Call this once at server startup instead of on every query.
+func (q *mobileQueries) InitSchema(ctx context.Context) error {
+	if err := q.ensureMobileMediaSchema(ctx); err != nil {
+		return err
+	}
+	if err := q.ensureMobileWalletKeySchema(ctx); err != nil {
+		return err
+	}
+	if err := q.ensureMobileWalletTransferSchema(ctx); err != nil {
+		return err
+	}
+	return q.ensureMobileWalletTokenSchema(ctx)
 }
 
 func (q *mobileQueries) scanUser(row *sql.Row) (*models.User, error) {
