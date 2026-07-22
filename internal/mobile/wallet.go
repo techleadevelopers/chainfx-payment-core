@@ -134,7 +134,34 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 		seen[symbol] = true
 	}
 
-	totalBRL := usdtValueBRL + bnbValueBRL + polyUSDTValueBRL + maticValueBRL
+	// Append BTC balance when the Bitcoin service is configured.
+	// Errors are silently ignored so a BTC node outage never breaks EVM balance display.
+	var btcValueBRL float64
+	if s.btcSvc != nil {
+		if btcBal, btcErr := s.btcSvc.GetBalance(r.Context(), uid); btcErr == nil {
+			btcPrice := mobileAssetPriceBRL(s.PriceCache(), "BTC")
+			availableBTC := float64(btcBal.AvailableSats) / 1e8
+			confirmedBTC := float64(btcBal.ConfirmedSats) / 1e8
+			pendingBTC := float64(btcBal.PendingSats) / 1e8
+			btcValueBRL = availableBTC * btcPrice
+			balances = append(balances, map[string]any{
+				"symbol":         "BTC",
+				"name":           "Bitcoin",
+				"network":        "BITCOIN",
+				"amount":         availableBTC,
+				"confirmed_btc":  confirmedBTC,
+				"pending_btc":    pendingBTC,
+				"confirmed_sats": btcBal.ConfirmedSats,
+				"pending_sats":   btcBal.PendingSats,
+				"available_sats": btcBal.AvailableSats,
+				"value_brl":      btcValueBRL,
+				"price_brl":      btcPrice,
+				"change_24h":     mobileAssetChange24h(s.PriceCache(), "BTC"),
+			})
+		}
+	}
+
+	totalBRL := usdtValueBRL + bnbValueBRL + polyUSDTValueBRL + maticValueBRL + btcValueBRL
 	writeJSON(w, http.StatusOK, map[string]any{
 		"wallet_address": walletAddr,
 		"balances":       balances,
@@ -143,8 +170,12 @@ func (s *Server) handleWalletBalance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// mobileOnchainWalletBalancesAll busca saldos BSC + Polygon em paralelo.
-// Resultado cacheado por walletBalanceCacheTTL para evitar RPC excessivo.
+// mobileOnchainWalletBalancesAll fetches BSC + Polygon balances concurrently.
+// Result is cached for walletBalanceCacheTTL to prevent per-request RPC calls.
+//
+// Performance note: uses s.bscPool / s.polygonPool (created once at startup)
+// instead of rpcpool.NewPool per call. The old pattern re-allocated circuit-
+// breakers and opened fresh TCP connections on every cache miss.
 func (s *Server) mobileOnchainWalletBalancesAll(ctx context.Context, walletAddr string) walletBalanceCacheEntry {
 	if s == nil || s.cfg == nil || strings.TrimSpace(walletAddr) == "" || !common.IsHexAddress(walletAddr) {
 		return walletBalanceCacheEntry{}
@@ -162,18 +193,14 @@ func (s *Server) mobileOnchainWalletBalancesAll(ctx context.Context, walletAddr 
 	)
 
 	wallet := common.HexToAddress(walletAddr)
-	balCtx, cancel := context.WithTimeout(ctx, 8*time.Second) // increased for parallel calls
+	balCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
-	// ── BSC ──────────────────────────────────────────────────────────────────
-	if rpcURLs := strings.TrimSpace(s.cfg.BscRpcUrls); rpcURLs != "" {
+	// ── BSC — reuse persistent pool ───────────────────────────────────────────
+	if pool := s.bscPool; pool != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pool, err := rpcpool.NewPool(rpcURLs)
-			if err != nil {
-				return
-			}
 			var bscUSDT, bnb float64
 			if native, err := pool.BalanceAt(balCtx, wallet); err == nil && native != nil {
 				bnb = bigIntToFloat(native, 18)
@@ -191,15 +218,11 @@ func (s *Server) mobileOnchainWalletBalancesAll(ctx context.Context, walletAddr 
 		}()
 	}
 
-	// ── Polygon ───────────────────────────────────────────────────────────────
-	if rpcURLs := strings.TrimSpace(s.cfg.PolygonRpcUrls); rpcURLs != "" {
+	// ── Polygon — reuse persistent pool ───────────────────────────────────────
+	if pool := s.polygonPool; pool != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			pool, err := rpcpool.NewPool(rpcURLs)
-			if err != nil {
-				return
-			}
 			var polyUSDT, matic float64
 			if native, err := pool.BalanceAt(balCtx, wallet); err == nil && native != nil {
 				matic = bigIntToFloat(native, 18)
