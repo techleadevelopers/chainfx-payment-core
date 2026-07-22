@@ -114,25 +114,46 @@ func (s *Server) handleKYCSubmit(w http.ResponseWriter, r *http.Request) {
 
 // handleKYCStatusV2 — GET /api/mobile/kyc/status
 // Returns the user's current approved KYC level, latest request status, and daily limits.
+// The two independent DB queries run in parallel to halve latency.
 func (s *Server) handleKYCStatusV2(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
 	db := mobileDB(s.db)
 
-	approvedLevel, err := db.GetApprovedKYCLevel(r.Context(), uid)
-	if err != nil {
-		slog.Error("erro interno", "err", err)
+	type levelResult struct {
+		level models.KYCLevel
+		err   error
+	}
+	type latestResult struct {
+		req *models.KYCRequest
+		err error
+	}
+
+	levelCh := make(chan levelResult, 1)
+	latestCh := make(chan latestResult, 1)
+
+	go func() {
+		level, err := db.GetApprovedKYCLevel(r.Context(), uid)
+		levelCh <- levelResult{level, err}
+	}()
+	go func() {
+		req, err := db.GetLatestKYCByUser(r.Context(), uid)
+		latestCh <- latestResult{req, err}
+	}()
+
+	lr := <-levelCh
+	if lr.err != nil {
+		slog.Error("erro interno", "err", lr.err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
 		return
 	}
+	la := <-latestCh
 
-	latest, _ := db.GetLatestKYCByUser(r.Context(), uid)
-
-	dailyLimit := models.KYCDailyLimits[approvedLevel]
+	dailyLimit := models.KYCDailyLimits[lr.level]
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"approved_level":  int(approvedLevel),
+		"approved_level":  int(lr.level),
 		"daily_limit_brl": dailyLimit,
-		"latest_request":  latest,
+		"latest_request":  la.req,
 		"levels": []map[string]any{
 			{"level": 0, "label": "Sem KYC", "daily_limit": models.KYCDailyLimits[0], "requirements": []string{"email", "telefone"}},
 			{"level": 1, "label": "KYC Básico", "daily_limit": models.KYCDailyLimits[1], "requirements": []string{"documento", "selfie"}},
