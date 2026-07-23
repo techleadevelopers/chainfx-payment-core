@@ -3,6 +3,7 @@ package workers
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -19,10 +20,15 @@ type DCAWorker struct {
 	db  *database.DB
 	cfg *config.Config
 	dlq *DeadLetterQueue
+	prices interface {
+		GetPrice(string) float64
+	}
 }
 
-func NewDCAWorker(bus *EventBus, db *database.DB, cfg *config.Config) *DCAWorker {
-	return &DCAWorker{bus: bus, db: db, cfg: cfg, dlq: NewPersistentDLQ(db, 500)}
+func NewDCAWorker(bus *EventBus, db *database.DB, cfg *config.Config, prices interface {
+	GetPrice(string) float64
+}) *DCAWorker {
+	return &DCAWorker{bus: bus, db: db, cfg: cfg, dlq: NewPersistentDLQ(db, 500), prices: prices}
 }
 
 func (dw *DCAWorker) Start(ctx context.Context) {
@@ -152,16 +158,110 @@ func (dw *DCAWorker) execute(ctx context.Context, s dcaStrategy) {
 		return
 	}
 
-	// Production: emit buy request with the same fields used by mobile buy.
+	buy, err := dw.createPaidBuyOrder(execCtx, s, destAddress)
+	if err != nil {
+		slog.Warn("DCAWorker: erro ao criar buy order para DCA", "strategy_id", s.ID, "err", err)
+		dw.dlq.Push(Event{
+			Type:    "dca.buy.requested",
+			OrderID: s.ID,
+			Payload: map[string]any{
+				"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
+				"network": s.Network, "amount_brl": s.AmountBRL, "dest_address": destAddress,
+				"source": "dca", "strategy_id": s.ID, "error": err.Error(),
+			},
+		}, 1, err.Error())
+		return
+	}
 	dw.bus.Publish(Event{
-		Type:    "dca.buy.requested",
-		OrderID: s.ID,
+		Type:    "buy.paid",
+		OrderID: buy.ID,
 		Payload: map[string]any{
 			"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
 			"network": s.Network, "amount_brl": s.AmountBRL, "dest_address": destAddress,
 			"source": "dca", "strategy_id": s.ID,
 		},
 	})
+}
+
+func (dw *DCAWorker) createPaidBuyOrder(ctx context.Context, s dcaStrategy, destAddress string) (*database.BuyOrder, error) {
+	rate := dw.dcaBuyRate(s.TokenSymbol)
+	if rate <= 0 {
+		return nil, fmt.Errorf("cotacao indisponivel para %s", s.TokenSymbol)
+	}
+	cryptoAmount := s.AmountBRL / rate
+	if cryptoAmount <= 0 {
+		return nil, fmt.Errorf("amount DCA invalido")
+	}
+	expiresAt := time.Now().UTC().Add(5 * time.Minute)
+	buy, err := dw.db.CreateBuyOrder(ctx, database.BuyOrderInput{
+		Status:            "pago_fiat",
+		AmountBRL:         s.AmountBRL,
+		AmountFiat:        s.AmountBRL,
+		FiatCurrency:      "BRL",
+		PaymentMethod:     "dca_internal",
+		ProviderPaymentID: "dca-" + s.ID + "-" + time.Now().UTC().Format("20060102150405"),
+		RequestID:         "dca-" + s.ID,
+		FeeBRL:            0,
+		PayoutBRL:         s.AmountBRL,
+		CryptoAmount:      cryptoAmount,
+		Asset:             strings.ToUpper(strings.TrimSpace(s.TokenSymbol)),
+		Network:           strings.ToUpper(strings.TrimSpace(s.Network)),
+		DestAddress:       strings.TrimSpace(destAddress),
+		RateLocked:        rate,
+		RateLockExpiresAt: expiresAt,
+		PixPayload: map[string]any{
+			"provider":    "dca_internal",
+			"source":      "dca",
+			"strategy_id": s.ID,
+			"user_id":     s.UserID,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	_, _ = dw.db.SQL.ExecContext(ctx, "UPDATE buy_orders SET user_id=$1::uuid WHERE id=$2::uuid", s.UserID, buy.ID)
+	_, _ = dw.db.SQL.ExecContext(ctx, `
+		UPDATE dca_strategies
+		SET total_invested = total_invested + $1,
+		    total_tokens = total_tokens + $2
+		WHERE id = $3`, s.AmountBRL, cryptoAmount, s.ID)
+	_ = dw.db.AddBuyEvent(ctx, buy.ID, "dca.buy.created", map[string]any{
+		"strategy_id": s.ID,
+		"user_id":     s.UserID,
+		"asset":       s.TokenSymbol,
+		"network":     s.Network,
+	})
+	return buy, nil
+}
+
+func (dw *DCAWorker) dcaBuyRate(asset string) float64 {
+	if dw == nil || dw.prices == nil {
+		return 0
+	}
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	usdtBRL := dw.prices.GetPrice("BRL")
+	if asset == "USDT" {
+		return dcaAddBps(usdtBRL, dw.cfg.BuyRateSpreadBps)
+	}
+	source := asset + "USDT_SOURCE"
+	usd := dw.prices.GetPrice(source)
+	if usd <= 0 {
+		usd = dw.prices.GetPrice(asset + "USDT")
+	}
+	if usd <= 0 || usdtBRL <= 0 {
+		return 0
+	}
+	return dcaAddBps(usd*usdtBRL, dw.cfg.BuyRateSpreadBps)
+}
+
+func dcaAddBps(value float64, bps int) float64 {
+	if value <= 0 {
+		return 0
+	}
+	if bps < 0 {
+		bps = 0
+	}
+	return value * (1 + float64(bps)/10000)
 }
 
 func (dw *DCAWorker) userWalletAddress(ctx context.Context, userID string) (string, error) {
