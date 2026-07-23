@@ -72,6 +72,23 @@ func (s *Server) handleDCAList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"strategies": strategies, "count": len(strategies), "summary": summary})
 }
 
+// handleDCADashboard — GET /api/mobile/dca/dashboard
+func (s *Server) handleDCADashboard(w http.ResponseWriter, r *http.Request) {
+	uid := userIDFromCtx(r)
+	list, err := mobileDB(s.db).ListDCA(r.Context(), uid)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	strategies, summary := s.enrichDCAList(list)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"strategies":   strategies,
+		"count":        len(strategies),
+		"summary":      summary,
+		"chart_points": summary["chart_points"],
+	})
+}
+
 // handleDCAUpdate — PUT /api/mobile/dca/{id}
 func (s *Server) handleDCAUpdate(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r)
@@ -113,6 +130,9 @@ func (s *Server) handleDCAStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "estratégia não encontrada"})
 		return
 	}
+	price := mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol)
+	currentValue := strategy.TotalTokens * price
+	pnl := currentValue - strategy.TotalInvested
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                strategy.ID,
 		"token_symbol":      strategy.TokenSymbol,
@@ -121,11 +141,11 @@ func (s *Server) handleDCAStatus(w http.ResponseWriter, r *http.Request) {
 		"total_invested":    strategy.TotalInvested,
 		"total_tokens":      strategy.TotalTokens,
 		"next_execution":    strategy.NextExecution,
-		"current_price_brl": mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol),
-		"current_value_brl": strategy.TotalTokens * mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol),
-		"pnl_brl":           strategy.TotalTokens*mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol) - strategy.TotalInvested,
-		"roi":               dcaROI(strategy.TotalTokens*mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol)-strategy.TotalInvested, strategy.TotalInvested),
-		"chart_points":      dcaChartPoints(strategy.TotalInvested, strategy.TotalTokens*mobileAssetPriceBRL(s.PriceCache(), strategy.TokenSymbol)),
+		"current_price_brl": price,
+		"current_value_brl": currentValue,
+		"pnl_brl":           pnl,
+		"roi":               dcaROI(pnl, strategy.TotalInvested),
+		"chart_points":      dcaChartPoints(strategy.TotalInvested, currentValue),
 	})
 }
 
