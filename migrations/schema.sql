@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS buy_orders (
   payout_brl NUMERIC(18,2),
   crypto_amount NUMERIC(28,8) NOT NULL,
   asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
+  network TEXT NOT NULL DEFAULT 'BSC',
   dest_address TEXT NOT NULL,
   rate_locked NUMERIC(28,8) NOT NULL,
   rate_lock_expires_at TIMESTAMPTZ NOT NULL,
@@ -119,6 +120,7 @@ ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS provider_payment_id TEXT;
 ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
 ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ;
 ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+ALTER TABLE buy_orders ADD COLUMN IF NOT EXISTS network TEXT NOT NULL DEFAULT 'BSC';
 UPDATE buy_orders SET amount_fiat = amount_brl WHERE amount_fiat IS NULL;
 
 CREATE TABLE IF NOT EXISTS buy_order_events (
