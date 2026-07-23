@@ -171,6 +171,8 @@ node tests\security_cloud_adversarial.js
 
 ## Backend: Liquidity Router Cloud Smoke
 
+Relatorio completo da integracao: [docs/liquidity-router-integration.md](./docs/liquidity-router-integration.md).
+
 Smoke operacional para validar se o fluxo BUY com Liquidity Router esta vivo na cloud, com catalogo backend-enforced, quote persistido, taxa ChainFX e spread aplicados:
 
 ```powershell
