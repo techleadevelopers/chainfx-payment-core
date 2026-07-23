@@ -35,6 +35,16 @@ func (s *Server) handleDCACreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "par token_symbol/network nao suportado para DCA"})
 		return
 	}
+	if network == "SOLANA" {
+		if s.solSvc == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Solana rail nao configurada para DCA"})
+			return
+		}
+		if _, err := s.solSvc.GetOrCreateAddress(r.Context(), uid); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao preparar endereco Solana para DCA"})
+			return
+		}
+	}
 	asset, _, err := s.mobileAssetBySymbol(r.Context(), tokenSymbol)
 	if err != nil && asset == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro interno"})
