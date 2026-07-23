@@ -1795,6 +1795,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   id TEXT PRIMARY KEY,
   side VARCHAR(8) NOT NULL CHECK (side IN ('buy','sell')),
   asset VARCHAR(16) NOT NULL,
+  network VARCHAR(32) NOT NULL DEFAULT '',
   fiat_currency VARCHAR(8) NOT NULL,
   payment_method VARCHAR(32) NOT NULL DEFAULT 'pix',
   amount_minor BIGINT NOT NULL,
@@ -1808,6 +1809,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   body_hash TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS network VARCHAR(32) NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_quotes_api_key_expires ON quotes(api_key_hash, expires_at);
 CREATE INDEX IF NOT EXISTS idx_quotes_consumable ON quotes(expires_at) WHERE consumed_at IS NULL;
 
