@@ -82,10 +82,13 @@ func (s *Server) fallbackMobileAssets() []models.Asset {
 	return []models.Asset{
 		{Symbol: "USDT", Name: "Tether USD", Network: "BSC", ContractAddress: stringPtrOrNil(usdtContract), Decimals: 18, MinAmount: 10, MaxAmount: 50000, DailyLimit: 50000, MonthlyLimit: 500000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "BTC", Name: "Bitcoin", Network: "BITCOIN", Decimals: 8, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "USDC", Name: "USD Coin", Network: "BASE", Decimals: 6, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "ETH", Name: "Ethereum", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "BNB", Name: "BNB", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 10000, DailyLimit: 10000, MonthlyLimit: 100000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "LINK", Name: "Chainlink", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "AVAX", Name: "Avalanche", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "SOL", Name: "Solana", Network: "SOLANA", Decimals: 9, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "APT", Name: "Aptos", Network: "APTOS", Decimals: 8, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 	}
 }
 
@@ -251,6 +254,18 @@ func assetPriceInBRL(pw interface{ GetPrice(string) float64 }, symbol string) fl
 		if bnbUSD > 0 && usdtBRL > 0 {
 			return bnbUSD * usdtBRL
 		}
+	case "SOL":
+		solUSD := pw.GetPrice("SOLUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if solUSD > 0 && usdtBRL > 0 {
+			return solUSD * usdtBRL
+		}
+	case "APT":
+		aptUSD := pw.GetPrice("APTUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if aptUSD > 0 && usdtBRL > 0 {
+			return aptUSD * usdtBRL
+		}
 	case "EURC":
 		usdtEUR := pw.GetPrice("USDTEUR")
 		usdtBRL := pw.GetPrice("BRL")
@@ -278,6 +293,10 @@ func assetPriceInUSD(pw interface{ GetPrice(string) float64 }, symbol string) fl
 		return pw.GetPrice("AVAXUSDT_SOURCE")
 	case "BNB":
 		return pw.GetPrice("BNBUSDT_SOURCE")
+	case "SOL":
+		return pw.GetPrice("SOLUSDT_SOURCE")
+	case "APT":
+		return pw.GetPrice("APTUSDT_SOURCE")
 	case "EURC":
 		if usdtEUR := pw.GetPrice("USDTEUR"); usdtEUR > 0 {
 			return 1 / usdtEUR
@@ -331,6 +350,10 @@ func mobileAssetChange24h(pw interface{ GetPrice(string) float64 }, symbol strin
 		return pw.GetPrice("LINK_CHANGE24H")
 	case "AVAX":
 		return pw.GetPrice("AVAX_CHANGE24H")
+	case "SOL":
+		return pw.GetPrice("SOL_CHANGE24H")
+	case "APT":
+		return pw.GetPrice("APT_CHANGE24H")
 	}
 	return 0
 }
