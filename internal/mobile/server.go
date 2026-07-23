@@ -77,21 +77,21 @@ type Server struct {
 	// Persistent RPC pools — created once at startup, reused across all requests.
 	// Creating a new pool per request was the #1 source of unnecessary latency
 	// because each NewPool call allocates circuit-breakers and dials fresh connections.
-	bscPool     *rpcpool.Pool // nil when BSC_RPC_URLS is not configured
-	polygonPool *rpcpool.Pool // nil when POLYGON_RPC_URLS is not configured
+	evmPools map[string]*rpcpool.Pool
 }
 
 // New creates a new mobile Server.
 // btcSvc may be nil — the BTC endpoints will respond with 503 BTC_DISABLED.
 func New(cfg *config.Config, db *database.DB, wm *workers.WorkerManager, btcSvc *bitcoin.Service) *Server {
 	s := &Server{
-		cfg:     cfg,
-		mcfg:    loadMobileConfig(),
-		db:      db,
-		workers: wm,
-		btcSvc:  btcSvc,
-		hub:     newWsHub(),
-		cache:   make(map[string]mobileCacheEntry),
+		cfg:      cfg,
+		mcfg:     loadMobileConfig(),
+		db:       db,
+		workers:  wm,
+		btcSvc:   btcSvc,
+		hub:      newWsHub(),
+		cache:    make(map[string]mobileCacheEntry),
+		evmPools: make(map[string]*rpcpool.Pool),
 	}
 	go s.hub.run()
 
@@ -99,20 +99,11 @@ func New(cfg *config.Config, db *database.DB, wm *workers.WorkerManager, btcSvc 
 	// Creating rpcpool.NewPool per-request was the largest source of wasted
 	// latency: each call allocates circuit-breakers and opens fresh TCP conns.
 	if cfg != nil {
-		if bscURLs := strings.TrimSpace(cfg.BscRpcUrls); bscURLs != "" {
-			if p, err := rpcpool.NewPool(bscURLs); err == nil {
-				s.bscPool = p
-			} else {
-				_, _ = os.Stderr.WriteString("[mobile] BSC RPC pool init warning: " + err.Error() + "\n")
-			}
-		}
-		if polyURLs := strings.TrimSpace(cfg.PolygonRpcUrls); polyURLs != "" {
-			if p, err := rpcpool.NewPool(polyURLs); err == nil {
-				s.polygonPool = p
-			} else {
-				_, _ = os.Stderr.WriteString("[mobile] Polygon RPC pool init warning: " + err.Error() + "\n")
-			}
-		}
+		s.initEVMPool("BSC", cfg.BscRpcUrls)
+		s.initEVMPool("POLYGON", cfg.PolygonRpcUrls)
+		s.initEVMPool("BASE", cfg.BaseRpcUrls)
+		s.initEVMPool("ARBITRUM", cfg.ArbitrumRpcUrls)
+		s.initEVMPool("ETHEREUM", cfg.EthereumRpcUrls)
 	}
 
 	// Run schema migrations once at startup instead of on every query.
@@ -124,6 +115,25 @@ func New(cfg *config.Config, db *database.DB, wm *workers.WorkerManager, btcSvc 
 		}
 	}
 	return s
+}
+
+func (s *Server) initEVMPool(network, rawURLs string) {
+	if s == nil || strings.TrimSpace(rawURLs) == "" {
+		return
+	}
+	p, err := rpcpool.NewPool(rawURLs)
+	if err != nil {
+		_, _ = os.Stderr.WriteString("[mobile] " + network + " RPC pool init warning: " + err.Error() + "\n")
+		return
+	}
+	s.evmPools[strings.ToUpper(strings.TrimSpace(network))] = p
+}
+
+func (s *Server) evmPool(network string) *rpcpool.Pool {
+	if s == nil || s.evmPools == nil {
+		return nil
+	}
+	return s.evmPools[strings.ToUpper(strings.TrimSpace(network))]
 }
 
 // Wrap returns an http.Handler that handles /api/mobile/... and delegates
