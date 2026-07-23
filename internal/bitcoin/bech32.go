@@ -93,9 +93,13 @@ func convertBits(data []byte, fromBits, toBits uint, pad bool) ([]byte, error) {
 	acc := 0
 	bits := uint(0)
 	maxv := (1 << toBits) - 1
+	maxAcc := (1 << (fromBits + toBits - 1)) - 1
 	var ret []byte
 	for _, value := range data {
-		acc = (acc << fromBits) | int(value)
+		if int(value)>>fromBits != 0 {
+			return nil, errors.New("bech32: valor fora do range")
+		}
+		acc = ((acc << fromBits) | int(value)) & maxAcc
 		bits += fromBits
 		for bits >= toBits {
 			bits -= toBits
