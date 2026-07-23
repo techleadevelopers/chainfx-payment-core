@@ -79,6 +79,14 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 			}
 		}
 	}
+	if s.mobileHotWalletUSDTBSCAllowed(policy) {
+		pairs = append(pairs, liquidity.Pair{
+			Asset:           "USDT",
+			Network:         "BSC",
+			ContractAddress: strings.TrimSpace(s.cfg.BscUsdtContract),
+			Decimals:        18,
+		})
+	}
 	out := make([]map[string]any, 0, len(pairs))
 	seen := map[string]bool{}
 	for _, pair := range pairs {
@@ -121,6 +129,26 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 		})
 	}
 	return out
+}
+
+func (s *Server) mobileHotWalletUSDTBSCAllowed(policy liquidity.PairPolicy) bool {
+	if s == nil || s.cfg == nil || strings.TrimSpace(s.cfg.BscUsdtContract) == "" || !s.mobileNetworkEnabled("BSC") {
+		return false
+	}
+	if _, ok := policy.Resolve("USDT", "BSC"); ok {
+		return true
+	}
+	if policy.Empty() {
+		return containsCSVFoldMobile(s.cfg.LiquidityAllowedAssets, "USDT") &&
+			containsCSVFoldMobile(s.cfg.LiquidityAllowedNetworks, "BSC")
+	}
+	for _, item := range splitMobilePolicyItems(s.cfg.LiquidityAllowedPairs) {
+		pair, ok := liquidity.ParsePair(item)
+		if ok && pair.Asset == "USDT" && pair.Network == "BSC" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) hydrateAndValidateMobileLiquidityPair(pair liquidity.Pair) (liquidity.Pair, bool) {
