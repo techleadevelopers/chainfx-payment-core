@@ -351,7 +351,7 @@ func (s *Server) handleWalletAddress(w http.ResponseWriter, r *http.Request) {
 	if user != nil && user.WalletAddress != nil && *user.WalletAddress != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"wallet_address": *user.WalletAddress,
-			"networks":       []string{"BSC", "POLYGON"},
+			"networks":       s.mobileEVMNetworks(),
 			"network":        "BSC", // compatibilidade retroativa
 		})
 		return
@@ -392,10 +392,23 @@ func (s *Server) handleWalletGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"wallet_address": checksummed,
-		"networks":       []string{"BSC", "POLYGON"}, // mesmo endereço EVM funciona nas duas redes
+		"networks":       s.mobileEVMNetworks(),
 		"custody":        "client",
 		"message":        "wallet registrada; a private key deve permanecer somente no app/agente",
 	})
+}
+
+func (s *Server) mobileEVMNetworks() []string {
+	var networks []string
+	for _, meta := range s.mobileSupportedNetworks() {
+		if meta.Family == "EVM" && meta.Enabled {
+			networks = append(networks, meta.Network)
+		}
+	}
+	if len(networks) == 0 {
+		return []string{"BSC"}
+	}
+	return networks
 }
 
 func (s *Server) handleWalletHistory(w http.ResponseWriter, r *http.Request) {
