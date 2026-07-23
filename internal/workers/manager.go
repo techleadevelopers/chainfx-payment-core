@@ -29,6 +29,7 @@ type WorkerManager struct {
 	PriceWorker         *PriceWorker
 	PayoutWorker        *PayoutWorker
 	BuySendWorker       *BuySendWorker
+	DCAWorker           *DCAWorker
 	OnchainWorker       *OnchainWorker
 	SellExpiryWorker    *SellExpiryWorker
 	SweepWorker         *SweepWorker
@@ -69,11 +70,13 @@ func NewWorkerManager(db *database.DB, cfg *config.Config, mailer *email.Service
 		btcWorker.SetSink(&btcEventSinkAdapter{bus: bus})
 	}
 
+	priceWorker := NewPriceWorker(bus)
 	return &WorkerManager{
 		Bus:                 bus,
-		PriceWorker:         NewPriceWorker(bus),
+		PriceWorker:         priceWorker,
 		PayoutWorker:        NewPayoutWorker(bus, db, cfg),
 		BuySendWorker:       NewBuySendWorker(bus, db, cfg),
+		DCAWorker:           NewDCAWorker(bus, db, cfg, priceWorker),
 		OnchainWorker:       NewOnchainWorker(bus, db, cfg),
 		SellExpiryWorker:    NewSellExpiryWorker(db),
 		SweepWorker:         NewSweepWorker(bus, db, cfg),
@@ -96,7 +99,7 @@ func NewWorkerManager(db *database.DB, cfg *config.Config, mailer *email.Service
 func (wm *WorkerManager) StartAll(ctx context.Context) {
 	slog.Info("Iniciando todos os workers...")
 
-	workerCount := 14 // base workers + KYC + AutoSweeper + Paymaster + NFC expiration + NFC settlement + reconciliation
+	workerCount := 15 // base workers + DCA + KYC + AutoSweeper + Paymaster + NFC expiration + NFC settlement + reconciliation
 	if wm.PSPRouter != nil {
 		workerCount++ // + PSP health probe
 	}
@@ -118,6 +121,11 @@ func (wm *WorkerManager) StartAll(ctx context.Context) {
 	go func() {
 		defer wm.wg.Done()
 		wm.BuySendWorker.Start(ctx)
+	}()
+
+	go func() {
+		defer wm.wg.Done()
+		wm.DCAWorker.Start(ctx)
 	}()
 
 	go func() {
