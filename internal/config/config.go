@@ -258,7 +258,7 @@ func LoadConfig() *Config {
 		BuyRateSpreadBps:              getEnvPercentAsBps("FEE_BUY_SPREAD_PERCENT", getEnvAsInt("FEE_BUY_SPREAD_BPS", 100)),
 		LiquidityRouterEnabled:        getEnvAsBool("LIQUIDITY_ROUTER_ENABLED", false),
 		LiquidityQuoteTimeoutMs:       getEnvAsInt("LIQUIDITY_QUOTE_TIMEOUT_MS", 2500),
-		LiquidityAllowedPairs:         strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_PAIRS", "USDT:BSC,USDT:POLYGON,BTC:BITCOIN,BNB:BSC")),
+		LiquidityAllowedPairs:         strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_PAIRS", "USDT:BSC,BTC:BITCOIN::8,BNB:BSC::18")),
 		LiquidityAllowedAssets:        strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_ASSETS", "USDT,BTC,BNB")),
 		LiquidityAllowedNetworks:      strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_NETWORKS", "BSC,POLYGON,BITCOIN")),
 		LiquidityHotWalletFirstAssets: strings.ToUpper(getEnv("LIQUIDITY_ROUTER_HOT_WALLET_FIRST_ASSETS", getEnv("LIQUIDITY_ROUTER_SKIP_ASSETS", "USDT"))),
