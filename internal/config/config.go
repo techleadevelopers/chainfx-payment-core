@@ -56,6 +56,17 @@ type Config struct {
 	LiquidityHotWalletFirstAssets string
 	LiquidityProviderURLs         string
 	LiquidityProviderAPIKey       string
+	BingXEnabled                  bool
+	BingXAPIBaseURL               string
+	BingXAPIKey                   string
+	BingXAPISecret                string
+	BingXRecvWindowMs             int
+	BingXAllowedAssets            string
+	BingXAllowedNetworks          string
+	BingXTakerFeeBps              int
+	BingXWithdrawFeeUSDT          float64
+	BingXTradeEnabled             bool
+	BingXWithdrawEnabled          bool
 	SellRateBps                   int
 	SellSpreadMinBps              int
 	SellSpreadMaxBps              int
@@ -283,6 +294,17 @@ func LoadConfig() *Config {
 		LiquidityHotWalletFirstAssets: strings.ToUpper(getEnv("LIQUIDITY_ROUTER_HOT_WALLET_FIRST_ASSETS", getEnv("LIQUIDITY_ROUTER_SKIP_ASSETS", "USDT"))),
 		LiquidityProviderURLs:         getEnv("LIQUIDITY_PROVIDER_URLS", ""),
 		LiquidityProviderAPIKey:       getEnv("LIQUIDITY_PROVIDER_API_KEY", ""),
+		BingXEnabled:                  getEnvAsBool("BINGX_ENABLED", false),
+		BingXAPIBaseURL:               getEnv("BINGX_API_BASE_URL", "https://open-api.bingx.com"),
+		BingXAPIKey:                   getEnv("BINGX_API_KEY", ""),
+		BingXAPISecret:                getEnv("BINGX_API_SECRET", ""),
+		BingXRecvWindowMs:             getEnvAsInt("BINGX_RECV_WINDOW_MS", 5000),
+		BingXAllowedAssets:            strings.ToUpper(getEnv("BINGX_ALLOWED_ASSETS", "BTC,ETH,BNB,SOL,LINK,AVAX")),
+		BingXAllowedNetworks:          strings.ToUpper(getEnv("BINGX_ALLOWED_NETWORKS", "BITCOIN,BSC,POLYGON,SOLANA,BASE,ARBITRUM,ETHEREUM")),
+		BingXTakerFeeBps:              getEnvAsInt("BINGX_TAKER_FEE_BPS", 10),
+		BingXWithdrawFeeUSDT:          getEnvAsFloat("BINGX_WITHDRAW_FEE_USDT", 0),
+		BingXTradeEnabled:             getEnvAsBool("BINGX_TRADE_ENABLED", false),
+		BingXWithdrawEnabled:          getEnvAsBool("BINGX_WITHDRAW_ENABLED", false),
 		SellRateBps:                   getEnvAsInt("SELL_RATE_BPS", 0),
 		SellSpreadMinBps:              getEnvPercentAsBps("FEE_SELL_SPREAD_MIN", getEnvAsInt("FEE_SELL_SPREAD_MIN_BPS", 800)),
 		SellSpreadMaxBps:              getEnvPercentAsBps("FEE_SELL_SPREAD_MAX", getEnvAsInt("FEE_SELL_SPREAD_MAX_BPS", 1000)),
