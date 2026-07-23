@@ -61,7 +61,12 @@ func (s *Server) handleListAssets(w http.ResponseWriter, r *http.Request) {
 		row.Change24 = mobileAssetChange24h(pw, a.Symbol)
 		out = append(out, row)
 	}
-	response := map[string]any{"assets": out, "count": len(out)}
+	response := map[string]any{
+		"assets":                     out,
+		"count":                      len(out),
+		"liquidity_supported_pairs":  s.mobileLiquiditySupportedPairs(),
+		"liquidity_supported_tokens": s.mobileLiquiditySupportedTokens(),
+	}
 	s.setMobileCache("assets:list", response, mobileHotCacheTTL)
 	writeJSON(w, http.StatusOK, response)
 }
@@ -74,9 +79,11 @@ func (s *Server) fallbackMobileAssets() []models.Asset {
 	}
 	return []models.Asset{
 		{Symbol: "USDT", Name: "Tether USD", Network: "BSC", ContractAddress: stringPtrOrNil(usdtContract), Decimals: 18, MinAmount: 10, MaxAmount: 50000, DailyLimit: 50000, MonthlyLimit: 500000, FeeBPS: 60, Active: true, CreatedAt: now},
-		{Symbol: "BTC", Name: "Bitcoin", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "BTC", Name: "Bitcoin", Network: "BITCOIN", Decimals: 8, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "ETH", Name: "Ethereum", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 		{Symbol: "BNB", Name: "BNB", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 10000, DailyLimit: 10000, MonthlyLimit: 100000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "LINK", Name: "Chainlink", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
+		{Symbol: "AVAX", Name: "Avalanche", Network: "BSC", Decimals: 18, MinAmount: 10, MaxAmount: 100000, DailyLimit: 100000, MonthlyLimit: 1000000, FeeBPS: 60, Active: true, CreatedAt: now},
 	}
 }
 
@@ -224,6 +231,18 @@ func assetPriceInBRL(pw interface{ GetPrice(string) float64 }, symbol string) fl
 		if ethUSD > 0 && usdtBRL > 0 {
 			return ethUSD * usdtBRL
 		}
+	case "LINK":
+		linkUSD := pw.GetPrice("LINKUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if linkUSD > 0 && usdtBRL > 0 {
+			return linkUSD * usdtBRL
+		}
+	case "AVAX":
+		avaxUSD := pw.GetPrice("AVAXUSDT_SOURCE")
+		usdtBRL := pw.GetPrice("BRL")
+		if avaxUSD > 0 && usdtBRL > 0 {
+			return avaxUSD * usdtBRL
+		}
 	case "BNB":
 		bnbUSD := pw.GetPrice("BNBUSDT_SOURCE")
 		usdtBRL := pw.GetPrice("BRL")
@@ -251,6 +270,10 @@ func assetPriceInUSD(pw interface{ GetPrice(string) float64 }, symbol string) fl
 		return pw.GetPrice("BTCUSDT_SOURCE")
 	case "ETH":
 		return pw.GetPrice("ETHUSDT_SOURCE")
+	case "LINK":
+		return pw.GetPrice("LINKUSDT_SOURCE")
+	case "AVAX":
+		return pw.GetPrice("AVAXUSDT_SOURCE")
 	case "BNB":
 		return pw.GetPrice("BNBUSDT_SOURCE")
 	case "EURC":
@@ -302,6 +325,10 @@ func mobileAssetChange24h(pw interface{ GetPrice(string) float64 }, symbol strin
 		return pw.GetPrice("ETH_CHANGE24H")
 	case "BNB":
 		return pw.GetPrice("BNB_CHANGE24H")
+	case "LINK":
+		return pw.GetPrice("LINK_CHANGE24H")
+	case "AVAX":
+		return pw.GetPrice("AVAX_CHANGE24H")
 	}
 	return 0
 }
