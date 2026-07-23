@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/liquidity"
 	"payment-gateway/internal/metrics"
 	"payment-gateway/internal/transactions"
 )
@@ -149,7 +150,7 @@ func (s *Server) handleMobileBuy(w http.ResponseWriter, r *http.Request) {
 	}
 	network := normalizeMobileBuyNetwork(firstNonEmptyStr(req.Network, "BSC"))
 	if network == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "network deve ser BSC, POLYGON ou BITCOIN"})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "network nao suportada para compra"})
 		return
 	}
 	req.Asset = strings.ToUpper(firstNonEmptyStr(req.Asset, "USDT"))
@@ -276,7 +277,10 @@ func (s *Server) writeDegradedMobileBuy(w http.ResponseWriter, r *http.Request, 
 	if paymentMethod != "pix" || amountBRL <= 0 || !looksLikeEVMAddress(destAddress) {
 		return false
 	}
-	if network != "BSC" && network != "POLYGON" {
+	if !liquidity.IsEVMNetwork(network) {
+		return false
+	}
+	if !s.mobileLiquidityPairSupported(asset, network) {
 		return false
 	}
 	if min := s.mobileBuyMinBRL(); min > 0 && amountBRL < min {
