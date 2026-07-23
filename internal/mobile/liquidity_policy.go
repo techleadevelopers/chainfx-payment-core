@@ -28,6 +28,9 @@ func (s *Server) mobileLiquidityPairSupported(asset, network string) bool {
 	if asset == "" || network == "" {
 		return false
 	}
+	if !s.mobileBuyPairExecutableWithoutRouter(asset, network) && !s.cfg.LiquidityRouterEnabled {
+		return false
+	}
 	policy := liquidity.NewPairPolicy(s.cfg.LiquidityAllowedPairs)
 	if !policy.Empty() {
 		return policy.Allows(asset, network)
@@ -44,6 +47,9 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 	pairs := policy.Pairs()
 	out := make([]map[string]any, 0, len(pairs))
 	for _, pair := range pairs {
+		if !s.cfg.LiquidityRouterEnabled && !s.mobileBuyPairExecutableWithoutRouter(pair.Asset, pair.Network) {
+			continue
+		}
 		out = append(out, map[string]any{
 			"asset":            pair.Asset,
 			"network":          pair.Network,
@@ -52,6 +58,10 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 		})
 	}
 	return out
+}
+
+func (s *Server) mobileBuyPairExecutableWithoutRouter(asset, network string) bool {
+	return strings.EqualFold(asset, "USDT") && normalizeMobileBuyNetwork(network) == "BSC"
 }
 
 func (s *Server) mobileLiquiditySupportedTokens() []string {
