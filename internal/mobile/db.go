@@ -148,6 +148,9 @@ func (q *mobileQueries) InitSchema(ctx context.Context) error {
 	if err := q.ensureMobileMediaSchema(ctx); err != nil {
 		return err
 	}
+	if err := q.ensureMobileDCASchema(ctx); err != nil {
+		return err
+	}
 	if err := q.ensureMobileWalletKeySchema(ctx); err != nil {
 		return err
 	}
@@ -197,6 +200,19 @@ func (q *mobileQueries) ensureMobileMediaSchema(ctx context.Context) error {
 		return err
 	}
 	_, err := q.sql.ExecContext(ctx, `ALTER TABLE kyc_requests ADD COLUMN IF NOT EXISTS facial_video_url VARCHAR(2048)`)
+	return err
+}
+
+func (q *mobileQueries) ensureMobileDCASchema(ctx context.Context) error {
+	_, err := q.sql.ExecContext(ctx, `
+                ALTER TABLE dca_strategies
+                  ADD COLUMN IF NOT EXISTS network TEXT NOT NULL DEFAULT 'BSC'`)
+	if err != nil {
+		return err
+	}
+	_, err = q.sql.ExecContext(ctx, `
+                CREATE INDEX IF NOT EXISTS idx_dca_user_network
+                  ON dca_strategies (user_id, token_symbol, network)`)
 	return err
 }
 
@@ -563,31 +579,39 @@ func (q *mobileQueries) DeleteDevice(ctx context.Context, userID, deviceID strin
 
 // ─── DCA ─────────────────────────────────────────────────────────────────────
 
-func (q *mobileQueries) CreateDCA(ctx context.Context, userID, symbol string, amount float64, freq models.DCAFrequency) (*models.DCAStrategy, error) {
+func (q *mobileQueries) CreateDCA(ctx context.Context, userID, symbol, network string, amount float64, freq models.DCAFrequency) (*models.DCAStrategy, error) {
 	next := nextDCAExecution(freq)
 	d := &models.DCAStrategy{}
 	err := q.sql.QueryRowContext(ctx, `
-                INSERT INTO dca_strategies (user_id, token_symbol, amount_brl, frequency, next_execution)
-                VALUES ($1,$2,$3,$4,$5)
-                RETURNING id,user_id,token_symbol,amount_brl,frequency,active,
+                INSERT INTO dca_strategies (user_id, token_symbol, network, amount_brl, frequency, next_execution)
+                VALUES ($1,$2,$3,$4,$5,$6)
+                RETURNING id,user_id,token_symbol,network,amount_brl,frequency,active,
                           total_invested,total_tokens,next_execution,created_at`,
-		userID, symbol, amount, string(freq), next).Scan(
-		&d.ID, &d.UserID, &d.TokenSymbol, &d.AmountBRL, &d.Frequency,
+		userID, symbol, network, amount, string(freq), next).Scan(
+		&d.ID, &d.UserID, &d.TokenSymbol, &d.Network, &d.AmountBRL, &d.Frequency,
 		&d.Active, &d.TotalInvested, &d.TotalTokens, &d.NextExecution, &d.CreatedAt)
 	return d, err
 }
 
 func (q *mobileQueries) GetDCA(ctx context.Context, id string) (*models.DCAStrategy, error) {
 	row := q.sql.QueryRowContext(ctx, `
-                SELECT id,user_id,token_symbol,amount_brl,frequency,active,
+                SELECT id,user_id,token_symbol,network,amount_brl,frequency,active,
                        total_invested,total_tokens,next_execution,created_at
                 FROM dca_strategies WHERE id=$1`, id)
 	return q.scanDCA(row)
 }
 
+func (q *mobileQueries) GetDCAByUser(ctx context.Context, id, userID string) (*models.DCAStrategy, error) {
+	row := q.sql.QueryRowContext(ctx, `
+                SELECT id,user_id,token_symbol,network,amount_brl,frequency,active,
+                       total_invested,total_tokens,next_execution,created_at
+                FROM dca_strategies WHERE id=$1 AND user_id=$2`, id, userID)
+	return q.scanDCA(row)
+}
+
 func (q *mobileQueries) ListDCA(ctx context.Context, userID string) ([]models.DCAStrategy, error) {
 	rows, err := q.sql.QueryContext(ctx, `
-                SELECT id,user_id,token_symbol,amount_brl,frequency,active,
+                SELECT id,user_id,token_symbol,network,amount_brl,frequency,active,
                        total_invested,total_tokens,next_execution,created_at
                 FROM dca_strategies WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
@@ -597,7 +621,7 @@ func (q *mobileQueries) ListDCA(ctx context.Context, userID string) ([]models.DC
 	var out []models.DCAStrategy
 	for rows.Next() {
 		d := models.DCAStrategy{}
-		_ = rows.Scan(&d.ID, &d.UserID, &d.TokenSymbol, &d.AmountBRL, &d.Frequency,
+		_ = rows.Scan(&d.ID, &d.UserID, &d.TokenSymbol, &d.Network, &d.AmountBRL, &d.Frequency,
 			&d.Active, &d.TotalInvested, &d.TotalTokens, &d.NextExecution, &d.CreatedAt)
 		out = append(out, d)
 	}
@@ -634,7 +658,7 @@ func (q *mobileQueries) DeleteDCA(ctx context.Context, id, userID string) error 
 
 func (q *mobileQueries) scanDCA(row *sql.Row) (*models.DCAStrategy, error) {
 	d := &models.DCAStrategy{}
-	err := row.Scan(&d.ID, &d.UserID, &d.TokenSymbol, &d.AmountBRL, &d.Frequency,
+	err := row.Scan(&d.ID, &d.UserID, &d.TokenSymbol, &d.Network, &d.AmountBRL, &d.Frequency,
 		&d.Active, &d.TotalInvested, &d.TotalTokens, &d.NextExecution, &d.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
