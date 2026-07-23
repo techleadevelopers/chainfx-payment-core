@@ -111,6 +111,36 @@ type DeveloperEvent struct {
 	CreatedAt time.Time       `json:"createdAt"`
 }
 
+type LiquidityQuoteRecord struct {
+	Provider           string
+	ProviderType       string
+	ExternalQuoteID    string
+	Asset              string
+	Network            string
+	FiatCostBRL        float64
+	ProviderFeeBRL     float64
+	NetworkFeeBRL      float64
+	SpreadBRL          float64
+	TotalCostBRL       float64
+	CryptoAmount       float64
+	DeliverySLASeconds int
+	ReliabilityBps     int
+	DirectDelivery     bool
+	Selected           bool
+	ExpiresAt          time.Time
+	Payload            any
+}
+
+type LiquidityExecutionRecord struct {
+	QuoteID         string
+	Provider        string
+	Status          string
+	ExternalOrderID string
+	TxHash          string
+	Error           string
+	Payload         any
+}
+
 type AdminTransaction struct {
 	Source            string    `json:"source"`
 	ID                string    `json:"id"`
@@ -907,6 +937,69 @@ func (db *DB) AddBuyEvent(ctx context.Context, buyOrderID, eventType string, pay
 	return err
 }
 
+func (db *DB) RecordLiquidityQuotes(ctx context.Context, buyOrderID string, quotes []LiquidityQuoteRecord) (map[string]string, error) {
+	ids := make(map[string]string, len(quotes))
+	if len(quotes) == 0 {
+		return ids, nil
+	}
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for _, quote := range quotes {
+		id := NewID()
+		raw, _ := json.Marshal(quote.Payload)
+		if len(raw) == 0 || string(raw) == "null" {
+			raw, _ = json.Marshal(map[string]any{})
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO buy_liquidity_quotes
+			  (id, buy_order_id, provider, provider_type, external_quote_id, asset, network,
+			   fiat_cost_brl, provider_fee_brl, network_fee_brl, spread_brl, total_cost_brl,
+			   crypto_amount, delivery_sla_seconds, reliability_bps, direct_delivery, selected, expires_at, payload)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+			ON CONFLICT (buy_order_id, provider, external_quote_id) DO UPDATE SET
+			  selected=EXCLUDED.selected,
+			  total_cost_brl=EXCLUDED.total_cost_brl,
+			  payload=EXCLUDED.payload,
+			  created_at=buy_liquidity_quotes.created_at
+		`, id, buyOrderID, quote.Provider, quote.ProviderType, nullableString(quote.ExternalQuoteID),
+			quote.Asset, quote.Network, quote.FiatCostBRL, quote.ProviderFeeBRL, quote.NetworkFeeBRL,
+			quote.SpreadBRL, quote.TotalCostBRL, quote.CryptoAmount, quote.DeliverySLASeconds,
+			quote.ReliabilityBps, quote.DirectDelivery, quote.Selected, quote.ExpiresAt, raw)
+		if err != nil {
+			return nil, err
+		}
+		ids[quote.Provider] = id
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (db *DB) RecordLiquidityExecution(ctx context.Context, buyOrderID string, exec LiquidityExecutionRecord) error {
+	raw, _ := json.Marshal(exec.Payload)
+	if len(raw) == 0 || string(raw) == "null" {
+		raw, _ = json.Marshal(map[string]any{})
+	}
+	_, err := db.SQL.ExecContext(ctx, `
+		INSERT INTO buy_liquidity_executions
+		  (id, buy_order_id, quote_id, provider, status, external_order_id, tx_hash, error, payload)
+		VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,NULLIF($6,''),NULLIF($7,''),NULLIF($8,''),$9)
+	`, NewID(), buyOrderID, exec.QuoteID, exec.Provider, exec.Status, exec.ExternalOrderID, exec.TxHash, exec.Error, raw)
+	if err != nil {
+		return err
+	}
+	return db.AddBuyEvent(ctx, buyOrderID, "buy.liquidity."+strings.ToLower(strings.TrimSpace(exec.Status)), map[string]any{
+		"provider":        exec.Provider,
+		"externalOrderId": exec.ExternalOrderID,
+		"txHash":          exec.TxHash,
+		"error":           exec.Error,
+	})
+}
+
 func (db *DB) HasBuyEvent(ctx context.Context, buyOrderID, eventType, field, value string) (bool, error) {
 	var exists bool
 	err := db.SQL.QueryRowContext(ctx,
@@ -1573,6 +1666,46 @@ CREATE TABLE IF NOT EXISTS buy_order_events (
 ALTER TABLE buy_order_events ADD COLUMN IF NOT EXISTS request_id TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_buy_webhook_provider_once ON buy_order_events (buy_order_id, (payload ->> 'providerId')) WHERE type = 'webhook.provider' AND payload ? 'providerId';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_order_idempotency_once ON order_events (order_id, (payload ->> 'key')) WHERE type = 'idempotency' AND payload ? 'key';
+
+CREATE TABLE IF NOT EXISTS buy_liquidity_quotes (
+  id UUID PRIMARY KEY,
+  buy_order_id UUID NOT NULL REFERENCES buy_orders(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_type TEXT NOT NULL DEFAULT 'liquidity_provider',
+  external_quote_id TEXT,
+  asset TEXT NOT NULL,
+  network TEXT NOT NULL,
+  fiat_cost_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
+  provider_fee_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
+  network_fee_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
+  spread_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
+  total_cost_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
+  crypto_amount NUMERIC(28,8) NOT NULL DEFAULT 0,
+  delivery_sla_seconds INTEGER NOT NULL DEFAULT 300,
+  reliability_bps INTEGER NOT NULL DEFAULT 9000,
+  direct_delivery BOOLEAN NOT NULL DEFAULT false,
+  selected BOOLEAN NOT NULL DEFAULT false,
+  expires_at TIMESTAMPTZ,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (buy_order_id, provider, external_quote_id)
+);
+CREATE INDEX IF NOT EXISTS idx_buy_liquidity_quotes_order_selected ON buy_liquidity_quotes(buy_order_id, selected, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS buy_liquidity_executions (
+  id UUID PRIMARY KEY,
+  buy_order_id UUID NOT NULL REFERENCES buy_orders(id) ON DELETE CASCADE,
+  quote_id UUID REFERENCES buy_liquidity_quotes(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL,
+  status TEXT NOT NULL,
+  external_order_id TEXT,
+  tx_hash TEXT,
+  error TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_buy_liquidity_executions_order_created ON buy_liquidity_executions(buy_order_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS settlement_instructions (
   id UUID PRIMARY KEY,
