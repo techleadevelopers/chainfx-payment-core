@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS buy_liquidity_quotes (
   external_quote_id TEXT,
   asset TEXT NOT NULL,
   network TEXT NOT NULL,
+  token_contract TEXT,
+  token_decimals INTEGER NOT NULL DEFAULT 18,
   fiat_cost_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
   provider_fee_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
   network_fee_brl NUMERIC(18,2) NOT NULL DEFAULT 0,
