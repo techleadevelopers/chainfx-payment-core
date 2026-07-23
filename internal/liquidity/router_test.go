@@ -24,9 +24,13 @@ func (p quoteProvider) Quote(context.Context, Request) (Quote, error) {
 type executableProvider struct {
 	quoteProvider
 	exec Execution
+	err  error
 }
 
 func (p executableProvider) Execute(context.Context, Request, Quote) (Execution, error) {
+	if p.err != nil {
+		return Execution{}, p.err
+	}
 	return p.exec, nil
 }
 
@@ -97,6 +101,35 @@ func TestRouterExecuteBestReturnsExecution(t *testing.T) {
 	}
 	if best.Provider != "partner-a" || exec.Provider != "partner-a" || exec.TxHash != "0xabc" {
 		t.Fatalf("unexpected execution: best=%+v exec=%+v", best, exec)
+	}
+}
+
+func TestRouterExecuteBestFallsBackToNextExecutableQuote(t *testing.T) {
+	router := NewRouter(
+		executableProvider{
+			quoteProvider: quoteProvider{name: "cheap-down", quote: Quote{TotalCostBRL: 99, CryptoAmount: 1, DeliverySLASeconds: 60}},
+			err:           errors.New("provider execute down"),
+		},
+		executableProvider{
+			quoteProvider: quoteProvider{name: "backup", quote: Quote{TotalCostBRL: 101, CryptoAmount: 1, DeliverySLASeconds: 60}},
+			exec:          Execution{Status: "sent", TxHash: "sig-backup"},
+		},
+	)
+
+	best, quotes, exec, err := router.ExecuteBest(context.Background(), Request{
+		OrderID:      "buy-sol",
+		Asset:        "SOL",
+		Network:      "SOLANA",
+		CryptoAmount: 1,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteBest returned error: %v", err)
+	}
+	if len(quotes) != 2 {
+		t.Fatalf("expected both provider quotes for audit, got %d", len(quotes))
+	}
+	if best.Provider != "backup" || exec.Provider != "backup" || exec.TxHash != "sig-backup" {
+		t.Fatalf("expected backup execution, best=%+v exec=%+v", best, exec)
 	}
 }
 
