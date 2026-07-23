@@ -37,11 +37,11 @@ func (bw *BuySendWorker) tryLiquidityExecution(ctx context.Context, buy *databas
 	if bw == nil || bw.cfg == nil || !bw.cfg.LiquidityRouterEnabled || bw.router == nil || buy == nil {
 		return false
 	}
-	if containsCSVFold(bw.cfg.LiquidityRouterSkipAssets, buy.Asset) {
-		return false
-	}
 	pair, ok := resolveLiquidityPair(bw.cfg, buy.Asset, buy.Network)
 	if !ok {
+		return false
+	}
+	if !bw.shouldUseLiquidityRouter(ctx, buy, pair) {
 		return false
 	}
 	timeout := time.Duration(bw.cfg.LiquidityQuoteTimeoutMs) * time.Millisecond
