@@ -6,6 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"payment-gateway/internal/database"
+	"payment-gateway/internal/money"
 )
 
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +98,28 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("payout fora dos limites (%.2f - %.2f BRL)", s.cfg.OrderMinBrl, s.cfg.OrderMaxBrl)})
 			return
 		}
+		expiresAt := time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second).UTC()
+		quoteID, persisted, err := s.persistPublicQuote(r, publicQuoteInput{
+			Side:          mode,
+			Asset:         asset,
+			Network:       network,
+			FiatCurrency:  "BRL",
+			PaymentMethod: paymentMethod,
+			AmountFiat:    amountFiat,
+			CryptoAmount:  amountUSDT,
+			Rate:          rate,
+			MarketRate:    marketRate,
+			FeeFiat:       spreadBRL,
+			ExpiresAt:     expiresAt,
+		})
+		if err != nil {
+			writeAPIError(w, r, http.StatusServiceUnavailable, "QUOTE_PERSISTENCE_UNAVAILABLE", "Quote persistence unavailable.")
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
+			"quoteId":           quoteID,
+			"quotePersisted":    persisted,
+			"quoteLockContract": "quoteId+side+asset+network+fiatCurrency+paymentMethod+amountFiat",
 			"mode":              mode,
 			"asset":             asset,
 			"network":           network,
@@ -111,7 +135,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			"rate":              rate,
 			"marketRate":        roundRate(marketRate),
 			"cryptoAmount":      amountUSDT,
-			"rateLockExpiresAt": time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
+			"rateLockExpiresAt": expiresAt,
 		})
 		return
 	}
@@ -123,7 +147,28 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	totalFiat := amountFiat + fee
+	expiresAt := time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second).UTC()
+	quoteID, persisted, err := s.persistPublicQuote(r, publicQuoteInput{
+		Side:          mode,
+		Asset:         asset,
+		Network:       network,
+		FiatCurrency:  fiatCurrency,
+		PaymentMethod: paymentMethod,
+		AmountFiat:    amountFiat,
+		CryptoAmount:  payout / rate,
+		Rate:          rate,
+		MarketRate:    marketRate,
+		FeeFiat:       fee,
+		ExpiresAt:     expiresAt,
+	})
+	if err != nil {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "QUOTE_PERSISTENCE_UNAVAILABLE", "Quote persistence unavailable.")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"quoteId":           quoteID,
+		"quotePersisted":    persisted,
+		"quoteLockContract": "quoteId+side+asset+network+fiatCurrency+paymentMethod+amountFiat",
 		"mode":              mode,
 		"asset":             asset,
 		"network":           network,
@@ -139,6 +184,55 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		"rate":              rate,
 		"marketRate":        roundRate(marketRate),
 		"cryptoAmount":      payout / rate,
-		"rateLockExpiresAt": time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second),
+		"rateLockExpiresAt": expiresAt,
 	})
+}
+
+type publicQuoteInput struct {
+	Side          string
+	Asset         string
+	Network       string
+	FiatCurrency  string
+	PaymentMethod string
+	AmountFiat    float64
+	CryptoAmount  float64
+	Rate          float64
+	MarketRate    float64
+	FeeFiat       float64
+	ExpiresAt     time.Time
+}
+
+func (s *Server) persistPublicQuote(r *http.Request, in publicQuoteInput) (string, bool, error) {
+	quoteID := "qt_" + strings.ReplaceAll(database.NewID(), "-", "")
+	if s == nil || s.db == nil {
+		return quoteID, false, nil
+	}
+	hash := database.CanonicalRequestHash(
+		strings.ToLower(strings.TrimSpace(in.Side)),
+		strings.ToUpper(strings.TrimSpace(in.Asset)),
+		normalizeBuyDeliveryNetwork(in.Network),
+		strings.ToUpper(strings.TrimSpace(in.FiatCurrency)),
+		strings.ToLower(strings.TrimSpace(in.PaymentMethod)),
+		strconv.FormatInt(int64(money.MoneyFromFloat(in.AmountFiat)), 10),
+		strings.TrimSpace(r.UserAgent()),
+	)
+	q, err := s.db.CreateQuote(r.Context(), database.QuoteInput{
+		ID:                quoteID,
+		Side:              in.Side,
+		Asset:             in.Asset,
+		Network:           normalizeBuyDeliveryNetwork(in.Network),
+		FiatCurrency:      in.FiatCurrency,
+		PaymentMethod:     in.PaymentMethod,
+		AmountMinor:       int64(money.MoneyFromFloat(in.AmountFiat)),
+		CryptoAmountUnits: money.TokenFromFloat(in.CryptoAmount).String(),
+		Rate:              in.Rate,
+		MarketRate:        in.MarketRate,
+		FeeMinor:          int64(money.MoneyFromFloat(in.FeeFiat)),
+		ExpiresAt:         in.ExpiresAt,
+		BodyHash:          hash,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return q.ID, true, nil
 }
