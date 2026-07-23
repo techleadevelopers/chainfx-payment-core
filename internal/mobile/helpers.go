@@ -30,6 +30,15 @@ func itoa(i int) string {
 	return strconv.Itoa(i)
 }
 
+func firstPositiveIntMobile(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 // sanitizeUser removes sensitive fields before sending to client.
 func sanitizeUser(u *models.User) map[string]any {
 	out := map[string]any{
