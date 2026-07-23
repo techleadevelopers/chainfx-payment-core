@@ -13,6 +13,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	var amountBRL, amountUSD, amountFiat float64
 	mode := "buy"
 	asset := "USDT"
+	network := ""
 	fiatCurrency := "BRL"
 	paymentMethod := "pix"
 	if r.Method == http.MethodGet {
@@ -21,6 +22,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		amountFiat, _ = strconv.ParseFloat(r.URL.Query().Get("amountFiat"), 64)
 		mode = defaultString(r.URL.Query().Get("mode"), mode)
 		asset = defaultString(r.URL.Query().Get("asset"), asset)
+		network = r.URL.Query().Get("network")
 		fiatCurrency = defaultString(r.URL.Query().Get("fiatCurrency"), fiatCurrency)
 		paymentMethod = defaultString(r.URL.Query().Get("paymentMethod"), paymentMethod)
 	} else {
@@ -32,6 +34,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			PaymentMethod string  `json:"paymentMethod"`
 			Mode          string  `json:"mode"`
 			Asset         string  `json:"asset"`
+			Network       string  `json:"network"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "JSON invalido"})
@@ -42,17 +45,23 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		amountFiat = req.AmountFiat
 		mode = defaultString(req.Mode, mode)
 		asset = defaultString(req.Asset, asset)
+		network = req.Network
 		fiatCurrency = defaultString(req.FiatCurrency, fiatCurrency)
 		paymentMethod = defaultString(req.PaymentMethod, paymentMethod)
 	}
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	asset = strings.ToUpper(strings.TrimSpace(asset))
+	network = normalizeBuyDeliveryNetwork(defaultString(network, s.deliveryNetwork()))
 	if mode != "buy" && mode != "sell" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "modo invalido"})
 		return
 	}
-	if asset != "USDT" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado nesta fase"})
+	if mode == "sell" && asset != "USDT" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "asset nao suportado para venda nesta fase"})
+		return
+	}
+	if mode == "buy" && !s.buyLiquidityPairSupported(asset, network) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "par asset/network nao suportado para compra"})
 		return
 	}
 	fiatCurrency, paymentMethod, amountFiat = normalizePaymentRail(fiatCurrency, paymentMethod, amountFiat, amountBRL, amountUSD)
@@ -72,6 +81,9 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	marketRate := s.workers.PriceWorker.GetPrice(fiatCurrency)
+	if mode == "buy" {
+		marketRate = s.buyAssetMarketRate(fiatCurrency, asset)
+	}
 	if marketRate <= 0 {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cotacao ainda nao carregada"})
 		return
@@ -86,6 +98,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"mode":              mode,
 			"asset":             asset,
+			"network":           network,
 			"amountFiat":        payoutBRL,
 			"subtotalFiat":      payoutBRL,
 			"fiatCurrency":      "BRL",
@@ -113,6 +126,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":              mode,
 		"asset":             asset,
+		"network":           network,
 		"amountFiat":        totalFiat,
 		"subtotalFiat":      amountFiat,
 		"fiatCurrency":      fiatCurrency,
