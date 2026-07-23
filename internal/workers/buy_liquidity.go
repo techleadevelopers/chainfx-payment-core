@@ -212,9 +212,9 @@ func resolveLiquidityPair(cfg *config.Config, asset, network string) (liquidity.
 
 func hydrateAndValidateLiquidityPair(cfg *config.Config, pair liquidity.Pair) (liquidity.Pair, bool) {
 	pair.Asset = strings.ToUpper(strings.TrimSpace(pair.Asset))
-	pair.Network = strings.ToUpper(strings.TrimSpace(pair.Network))
+	pair.Network = liquidity.NormalizeNetwork(pair.Network)
 	if pair.Decimals <= 0 {
-		pair.Decimals = 18
+		pair.Decimals = liquidity.DefaultDecimals(pair.Asset, pair.Network)
 	}
 	if pair.ContractAddress == "" {
 		switch pair.Asset + ":" + pair.Network {
@@ -227,27 +227,58 @@ func hydrateAndValidateLiquidityPair(cfg *config.Config, pair liquidity.Pair) (l
 			}
 		}
 	}
+	pair = liquidity.EnrichPair(pair)
 	if isNativeLiquidityPair(pair) {
 		return pair, true
 	}
-	if pair.Network == "BSC" || pair.Network == "POLYGON" {
+	if liquidity.IsEVMNetwork(pair.Network) {
 		return pair, looksLikeEVMContract(pair.ContractAddress)
+	}
+	if pair.Network == "SOLANA" {
+		return pair, looksLikeBase58AddressWorker(pair.ContractAddress, 32, 44)
+	}
+	if pair.Network == "APTOS" {
+		return pair, looksLikeFixedHexAddressWorker(pair.ContractAddress, 64)
 	}
 	return pair, true
 }
 
 func isNativeLiquidityPair(pair liquidity.Pair) bool {
-	switch pair.Asset + ":" + pair.Network {
-	case "BTC:BITCOIN", "BNB:BSC":
+	if liquidity.IsNativeAsset(pair.Asset, pair.Network) {
 		return true
-	default:
-		return false
 	}
+	return pair.Asset == "BTC" && pair.Network == "BITCOIN"
 }
 
 func looksLikeEVMContract(address string) bool {
 	address = strings.TrimSpace(address)
 	if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+		return false
+	}
+	for _, ch := range address[2:] {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeBase58AddressWorker(address string, minLen, maxLen int) bool {
+	if len(address) < minLen || len(address) > maxLen {
+		return false
+	}
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+	for _, ch := range address {
+		if !strings.ContainsRune(alphabet, ch) {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeFixedHexAddressWorker(address string, hexLen int) bool {
+	address = strings.TrimSpace(address)
+	if !strings.HasPrefix(address, "0x") || len(address) != hexLen+2 {
 		return false
 	}
 	for _, ch := range address[2:] {
