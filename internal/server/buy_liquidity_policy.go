@@ -7,6 +7,7 @@ import (
 
 	"payment-gateway/internal/bitcoin"
 	"payment-gateway/internal/liquidity"
+	"payment-gateway/internal/solana"
 )
 
 func normalizeBuyDeliveryNetwork(network string) string {
@@ -124,7 +125,7 @@ func validBuyDeliveryAddress(network, address string) bool {
 			bitcoin.ValidateAddress(address, "tb") == nil ||
 			bitcoin.ValidateAddress(address, "bcrt") == nil
 	case "SOLANA":
-		return looksLikeBase58Address(address, 32, 44)
+		return solana.ValidateAddress(address) == nil
 	case "APTOS":
 		return looksLikeFixedHexAddress(address, 64)
 	default:
