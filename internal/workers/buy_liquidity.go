@@ -37,7 +37,11 @@ func (bw *BuySendWorker) tryLiquidityExecution(ctx context.Context, buy *databas
 	if bw == nil || bw.cfg == nil || !bw.cfg.LiquidityRouterEnabled || bw.router == nil || buy == nil {
 		return false
 	}
-	if !containsCSVFold(bw.cfg.LiquidityAllowedAssets, buy.Asset) || !containsCSVFold(bw.cfg.LiquidityAllowedNetworks, buy.Network) {
+	if containsCSVFold(bw.cfg.LiquidityRouterSkipAssets, buy.Asset) {
+		return false
+	}
+	pair, ok := resolveLiquidityPair(bw.cfg, buy.Asset, buy.Network)
+	if !ok {
 		return false
 	}
 	timeout := time.Duration(bw.cfg.LiquidityQuoteTimeoutMs) * time.Millisecond
@@ -49,8 +53,10 @@ func (bw *BuySendWorker) tryLiquidityExecution(ctx context.Context, buy *databas
 
 	req := liquidity.Request{
 		OrderID:         buy.ID,
-		Asset:           buy.Asset,
-		Network:         buy.Network,
+		Asset:           pair.Asset,
+		Network:         pair.Network,
+		TokenContract:   pair.ContractAddress,
+		TokenDecimals:   pair.Decimals,
 		FiatCurrency:    buy.FiatCurrency,
 		AmountBRL:       buy.PayoutBRL,
 		CryptoAmount:    buy.CryptoAmount,
@@ -123,6 +129,8 @@ func liquidityQuoteRecord(quote liquidity.Quote, selected bool) database.Liquidi
 		ExternalQuoteID:    quote.ExternalQuoteID,
 		Asset:              quote.Asset,
 		Network:            quote.Network,
+		TokenContract:      quote.TokenContract,
+		TokenDecimals:      quote.TokenDecimals,
 		FiatCostBRL:        quote.FiatCostBRL,
 		ProviderFeeBRL:     quote.ProviderFeeBRL,
 		NetworkFeeBRL:      quote.NetworkFeeBRL,
@@ -178,6 +186,76 @@ func containsCSVFold(raw, value string) bool {
 		}
 	}
 	return false
+}
+
+func resolveLiquidityPair(cfg *config.Config, asset, network string) (liquidity.Pair, bool) {
+	if cfg == nil {
+		return liquidity.Pair{}, false
+	}
+	policy := liquidity.NewPairPolicy(cfg.LiquidityAllowedPairs)
+	if !policy.Empty() {
+		pair, ok := policy.Resolve(asset, network)
+		if !ok {
+			return liquidity.Pair{}, false
+		}
+		return hydrateAndValidateLiquidityPair(cfg, pair)
+	}
+	if !containsCSVFold(cfg.LiquidityAllowedAssets, asset) || !containsCSVFold(cfg.LiquidityAllowedNetworks, network) {
+		return liquidity.Pair{}, false
+	}
+	pair, ok := liquidity.ParsePair(strings.ToUpper(strings.TrimSpace(asset)) + ":" + strings.ToUpper(strings.TrimSpace(network)))
+	if !ok {
+		return liquidity.Pair{}, false
+	}
+	return hydrateAndValidateLiquidityPair(cfg, pair)
+}
+
+func hydrateAndValidateLiquidityPair(cfg *config.Config, pair liquidity.Pair) (liquidity.Pair, bool) {
+	pair.Asset = strings.ToUpper(strings.TrimSpace(pair.Asset))
+	pair.Network = strings.ToUpper(strings.TrimSpace(pair.Network))
+	if pair.Decimals <= 0 {
+		pair.Decimals = 18
+	}
+	if pair.ContractAddress == "" {
+		switch pair.Asset + ":" + pair.Network {
+		case "USDT:BSC":
+			pair.ContractAddress = strings.TrimSpace(cfg.BscUsdtContract)
+		case "USDT:POLYGON":
+			pair.ContractAddress = strings.TrimSpace(cfg.PolygonUsdtContract)
+			if pair.Decimals == 18 {
+				pair.Decimals = 6
+			}
+		}
+	}
+	if isNativeLiquidityPair(pair) {
+		return pair, true
+	}
+	if pair.Network == "BSC" || pair.Network == "POLYGON" {
+		return pair, looksLikeEVMContract(pair.ContractAddress)
+	}
+	return pair, true
+}
+
+func isNativeLiquidityPair(pair liquidity.Pair) bool {
+	switch pair.Asset + ":" + pair.Network {
+	case "BTC:BITCOIN", "BNB:BSC":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeEVMContract(address string) bool {
+	address = strings.TrimSpace(address)
+	if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+		return false
+	}
+	for _, ch := range address[2:] {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func splitCSV(raw string) []string {
