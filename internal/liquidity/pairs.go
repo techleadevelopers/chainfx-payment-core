@@ -9,6 +9,8 @@ type Pair struct {
 	Network         string
 	ContractAddress string
 	Decimals        int
+	Family          string
+	TokenStandard   string
 }
 
 type PairPolicy struct {
@@ -36,7 +38,7 @@ func ParsePair(raw string) (Pair, bool) {
 		Asset:           strings.ToUpper(strings.TrimSpace(parts[0])),
 		Network:         normalizeNetwork(parts[1]),
 		ContractAddress: "",
-		Decimals:        18,
+		Decimals:        0,
 	}
 	if pair.Asset == "" || pair.Network == "" {
 		return Pair{}, false
@@ -47,6 +49,7 @@ func ParsePair(raw string) (Pair, bool) {
 	if len(parts) >= 4 {
 		pair.Decimals = atoiDefault(parts[3], pair.Decimals)
 	}
+	pair = EnrichPair(pair)
 	return pair, true
 }
 
@@ -97,4 +100,117 @@ func atoiDefault(raw string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+type NetworkMeta struct {
+	Network        string `json:"network"`
+	Family         string `json:"family"`
+	ChainID        string `json:"chain_id,omitempty"`
+	NativeAsset    string `json:"native_asset"`
+	ExplorerURL    string `json:"explorer_url,omitempty"`
+	AddressFormat  string `json:"address_format"`
+	Enabled        bool   `json:"enabled"`
+	ReceiveEnabled bool   `json:"receive_enabled"`
+	SendEnabled    bool   `json:"send_enabled"`
+	BuyEnabled     bool   `json:"buy_enabled"`
+	DCAEnabled     bool   `json:"dca_enabled"`
+}
+
+func NetworkMetadata(network string) (NetworkMeta, bool) {
+	switch NormalizeNetwork(network) {
+	case "BSC":
+		return evmNetwork("BSC", "56", "BNB", "https://bscscan.com"), true
+	case "POLYGON":
+		return evmNetwork("POLYGON", "137", "POL", "https://polygonscan.com"), true
+	case "BASE":
+		return evmNetwork("BASE", "8453", "ETH", "https://basescan.org"), true
+	case "ARBITRUM":
+		return evmNetwork("ARBITRUM", "42161", "ETH", "https://arbiscan.io"), true
+	case "ETHEREUM":
+		return evmNetwork("ETHEREUM", "1", "ETH", "https://etherscan.io"), true
+	case "BITCOIN":
+		return NetworkMeta{Network: "BITCOIN", Family: "BITCOIN", ChainID: "mainnet", NativeAsset: "BTC", ExplorerURL: "https://mempool.space", AddressFormat: "BITCOIN_BECH32", Enabled: true, ReceiveEnabled: true, SendEnabled: true, BuyEnabled: true, DCAEnabled: true}, true
+	case "SOLANA":
+		return NetworkMeta{Network: "SOLANA", Family: "SOLANA", ChainID: "mainnet", NativeAsset: "SOL", ExplorerURL: "https://solscan.io", AddressFormat: "SOLANA_BASE58", Enabled: true, ReceiveEnabled: true, SendEnabled: true, BuyEnabled: true, DCAEnabled: true}, true
+	case "APTOS":
+		return NetworkMeta{Network: "APTOS", Family: "APTOS", ChainID: "mainnet", NativeAsset: "APT", ExplorerURL: "https://explorer.aptoslabs.com", AddressFormat: "APTOS_0X32", Enabled: true, ReceiveEnabled: true, SendEnabled: true, BuyEnabled: true, DCAEnabled: true}, true
+	default:
+		return NetworkMeta{}, false
+	}
+}
+
+func evmNetwork(network, chainID, nativeAsset, explorerURL string) NetworkMeta {
+	return NetworkMeta{Network: network, Family: "EVM", ChainID: chainID, NativeAsset: nativeAsset, ExplorerURL: explorerURL, AddressFormat: "EVM_0X", Enabled: true, ReceiveEnabled: true, SendEnabled: true, BuyEnabled: true, DCAEnabled: true}
+}
+
+func EnrichPair(pair Pair) Pair {
+	pair.Asset = strings.ToUpper(strings.TrimSpace(pair.Asset))
+	pair.Network = NormalizeNetwork(pair.Network)
+	pair.ContractAddress = strings.TrimSpace(pair.ContractAddress)
+	if pair.Decimals <= 0 {
+		pair.Decimals = DefaultDecimals(pair.Asset, pair.Network)
+	}
+	if meta, ok := NetworkMetadata(pair.Network); ok {
+		pair.Family = meta.Family
+	}
+	pair.TokenStandard = TokenStandard(pair.Asset, pair.Network, pair.ContractAddress)
+	return pair
+}
+
+func DefaultDecimals(asset, network string) int {
+	switch strings.ToUpper(strings.TrimSpace(asset)) + ":" + NormalizeNetwork(network) {
+	case "BTC:BITCOIN":
+		return 8
+	case "SOL:SOLANA":
+		return 9
+	case "APT:APTOS":
+		return 8
+	case "USDT:POLYGON", "USDC:POLYGON", "USDT:SOLANA", "USDC:SOLANA", "USDC:BASE", "USDC:ARBITRUM", "USDC:ETHEREUM":
+		return 6
+	default:
+		return 18
+	}
+}
+
+func TokenStandard(asset, network, contractAddress string) string {
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	network = NormalizeNetwork(network)
+	if asset == "BTC" && network == "BITCOIN" {
+		return "BTC"
+	}
+	if IsNativeAsset(asset, network) {
+		return "NATIVE"
+	}
+	switch family, _ := Family(network); family {
+	case "EVM":
+		return "ERC20"
+	case "SOLANA":
+		if strings.TrimSpace(contractAddress) == "" {
+			return "NATIVE"
+		}
+		return "SPL"
+	case "APTOS":
+		if strings.TrimSpace(contractAddress) == "" {
+			return "NATIVE"
+		}
+		return "APTOS_FA"
+	default:
+		return ""
+	}
+}
+
+func Family(network string) (string, bool) {
+	meta, ok := NetworkMetadata(network)
+	return meta.Family, ok
+}
+
+func IsEVMNetwork(network string) bool {
+	family, ok := Family(network)
+	return ok && family == "EVM"
+}
+
+func IsNativeAsset(asset, network string) bool {
+	asset = strings.ToUpper(strings.TrimSpace(asset))
+	meta, ok := NetworkMetadata(network)
+	return ok && asset == meta.NativeAsset
 }
