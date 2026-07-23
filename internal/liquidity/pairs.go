@@ -35,8 +35,8 @@ func ParsePair(raw string) (Pair, bool) {
 		return Pair{}, false
 	}
 	pair := Pair{
-		Asset:           strings.ToUpper(strings.TrimSpace(parts[0])),
-		Network:         normalizeNetwork(parts[1]),
+		Asset:           strings.ToUpper(cleanPairPart(parts[0])),
+		Network:         normalizeNetwork(cleanPairPart(parts[1])),
 		ContractAddress: "",
 		Decimals:        0,
 	}
@@ -44,13 +44,17 @@ func ParsePair(raw string) (Pair, bool) {
 		return Pair{}, false
 	}
 	if len(parts) >= 3 {
-		pair.ContractAddress = strings.TrimSpace(parts[2])
+		pair.ContractAddress = cleanPairPart(parts[2])
 	}
 	if len(parts) >= 4 {
-		pair.Decimals = atoiDefault(parts[3], pair.Decimals)
+		pair.Decimals = atoiDefault(cleanPairPart(parts[3]), pair.Decimals)
 	}
 	pair = EnrichPair(pair)
 	return pair, true
+}
+
+func cleanPairPart(value string) string {
+	return strings.Trim(strings.TrimSpace(value), `"'`)
 }
 
 func (p PairPolicy) Empty() bool {
