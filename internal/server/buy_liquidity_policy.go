@@ -35,30 +35,63 @@ func (s *Server) resolveExecutableBuyPair(asset, network string) (liquidity.Pair
 	if !s.buyNetworkEnabled(network) {
 		return liquidity.Pair{}, false
 	}
-	if !s.cfg.LiquidityRouterEnabled && !buyPairExecutableWithoutRouter(asset, network) {
-		return liquidity.Pair{}, false
-	}
 	policy := liquidity.NewPairPolicy(s.cfg.LiquidityAllowedPairs)
+	var pair liquidity.Pair
+	var ok bool
 	if !policy.Empty() {
-		pair, ok := policy.Resolve(asset, network)
+		pair, ok = policy.Resolve(asset, network)
 		if !ok {
 			return liquidity.Pair{}, false
 		}
-		return s.hydrateAndValidateBuyPair(pair)
+	} else {
+		if !containsCSVFoldServer(s.cfg.LiquidityAllowedAssets, asset) ||
+			!containsCSVFoldServer(s.cfg.LiquidityAllowedNetworks, network) {
+			return liquidity.Pair{}, false
+		}
+		pair, ok = liquidity.ParsePair(asset + ":" + network)
+		if !ok {
+			return liquidity.Pair{}, false
+		}
 	}
-	if !containsCSVFoldServer(s.cfg.LiquidityAllowedAssets, asset) ||
-		!containsCSVFoldServer(s.cfg.LiquidityAllowedNetworks, network) {
-		return liquidity.Pair{}, false
-	}
-	pair, ok := liquidity.ParsePair(asset + ":" + network)
+	pair, ok = s.hydrateAndValidateBuyPair(pair)
 	if !ok {
 		return liquidity.Pair{}, false
 	}
-	return s.hydrateAndValidateBuyPair(pair)
+	if !s.buyPairHasExecutionRoute(pair) {
+		return liquidity.Pair{}, false
+	}
+	return pair, true
 }
 
 func buyPairExecutableWithoutRouter(asset, network string) bool {
 	return strings.EqualFold(asset, "USDT") && normalizeBuyDeliveryNetwork(network) == "BSC"
+}
+
+func (s *Server) buyPairHasExecutionRoute(pair liquidity.Pair) bool {
+	if s == nil || s.cfg == nil {
+		return false
+	}
+	pair = liquidity.EnrichPair(pair)
+	if buyPairExecutableWithoutRouter(pair.Asset, pair.Network) {
+		return true
+	}
+	if !s.cfg.LiquidityRouterEnabled {
+		return false
+	}
+	if strings.TrimSpace(s.cfg.LiquidityProviderURLs) != "" {
+		return true
+	}
+	if !s.cfg.BingXEnabled || !s.cfg.BingXTradeEnabled || !s.cfg.BingXWithdrawEnabled {
+		return false
+	}
+	if strings.TrimSpace(s.cfg.BingXAPIKey) == "" || strings.TrimSpace(s.cfg.BingXAPISecret) == "" {
+		return false
+	}
+	if strings.EqualFold(pair.Asset, "USDT") {
+		return false
+	}
+	return containsCSVFoldServer(s.cfg.BingXAllowedAssets, pair.Asset) &&
+		containsCSVFoldServer(s.cfg.BingXAllowedNetworks, pair.Network)
 }
 
 func (s *Server) handleBuyPairs(w http.ResponseWriter, r *http.Request) {
