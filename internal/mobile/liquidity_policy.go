@@ -91,6 +91,9 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 	seen := map[string]bool{}
 	for _, pair := range pairs {
 		resolved, ok := s.resolveMobileLiquidityPair(pair.Asset, pair.Network)
+		if !ok && s.mobilePairIsUSDTBSC(pair) && s.mobileHotWalletUSDTBSCAllowed(policy) {
+			resolved, ok = s.hydrateAndValidateMobileLiquidityPair(pair)
+		}
 		if !ok {
 			continue
 		}
@@ -129,6 +132,10 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 		})
 	}
 	return out
+}
+
+func (s *Server) mobilePairIsUSDTBSC(pair liquidity.Pair) bool {
+	return strings.EqualFold(pair.Asset, "USDT") && normalizeMobileBuyNetwork(pair.Network) == "BSC"
 }
 
 func (s *Server) mobileHotWalletUSDTBSCAllowed(policy liquidity.PairPolicy) bool {
