@@ -52,6 +52,7 @@ type Config struct {
 	LiquidityAllowedPairs         string
 	LiquidityAllowedAssets        string
 	LiquidityAllowedNetworks      string
+	SupportedNetworks            string
 	LiquidityHotWalletFirstAssets string
 	LiquidityProviderURLs         string
 	LiquidityProviderAPIKey       string
@@ -261,6 +262,7 @@ func LoadConfig() *Config {
 		LiquidityAllowedPairs:         strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_PAIRS", "USDT:BSC,BTC:BITCOIN::8,BNB:BSC::18")),
 		LiquidityAllowedAssets:        strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_ASSETS", "USDT,BTC,BNB")),
 		LiquidityAllowedNetworks:      strings.ToUpper(getEnv("LIQUIDITY_ALLOWED_NETWORKS", "BSC,POLYGON,BITCOIN")),
+		SupportedNetworks:            strings.ToUpper(getEnv("SUPPORTED_NETWORKS", getEnv("LIQUIDITY_ALLOWED_NETWORKS", "BSC,POLYGON,BITCOIN"))),
 		LiquidityHotWalletFirstAssets: strings.ToUpper(getEnv("LIQUIDITY_ROUTER_HOT_WALLET_FIRST_ASSETS", getEnv("LIQUIDITY_ROUTER_SKIP_ASSETS", "USDT"))),
 		LiquidityProviderURLs:         getEnv("LIQUIDITY_PROVIDER_URLS", ""),
 		LiquidityProviderAPIKey:       getEnv("LIQUIDITY_PROVIDER_API_KEY", ""),
