@@ -131,17 +131,28 @@ func TestMobileLiquiditySupportedPairsKeepsUSDTBSCWithExtendedProductionPairs(t 
 		t.Fatalf("expected USDT:BSC to stay buy-enabled with extended pairs")
 	}
 
-	foundUSDTBSC := false
+	expectedUSDTPairs := map[string]bool{
+		"BSC":      false,
+		"POLYGON":  false,
+		"ARBITRUM": false,
+		"ETHEREUM": false,
+	}
 	for _, pair := range s.mobileLiquiditySupportedPairs() {
-		if pair["asset"] == "USDT" && pair["network"] == "BSC" {
-			foundUSDTBSC = true
+		if pair["asset"] == "USDT" {
+			network, _ := pair["network"].(string)
+			if _, ok := expectedUSDTPairs[network]; !ok {
+				continue
+			}
+			expectedUSDTPairs[network] = true
 			if pair["buy_enabled"] != true {
-				t.Fatalf("expected USDT:BSC buy_enabled=true, got %+v", pair)
+				t.Fatalf("expected USDT:%s buy_enabled=true, got %+v", network, pair)
 			}
 		}
 	}
-	if !foundUSDTBSC {
-		t.Fatalf("expected supported pairs to include USDT:BSC, got %+v", s.mobileLiquiditySupportedPairs())
+	for network, found := range expectedUSDTPairs {
+		if !found {
+			t.Fatalf("expected supported pairs to include USDT:%s, got %+v", network, s.mobileLiquiditySupportedPairs())
+		}
 	}
 }
 
