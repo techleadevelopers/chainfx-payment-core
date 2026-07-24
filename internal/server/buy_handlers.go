@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,16 +124,22 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		rate = s.buyRate(marketRate)
 	}
 	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
+	payout := amountFiat
+	cryptoAmount := payout / rate
+	if consumedQuote != nil {
+		fee = money.MoneyMinor(consumedQuote.FeeMinor).Float64()
+		if units, err := strconv.ParseInt(strings.TrimSpace(consumedQuote.CryptoAmountUnits), 10, 64); err == nil && units > 0 {
+			cryptoAmount = money.TokenUnits(units).Float64()
+		}
+	}
 	if req.RateLocked > 0 && req.FeeBRL > 0 && s.trustedMobileLoopback(r) {
 		fee = req.FeeBRL
 	}
-	payout := amountFiat
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apÃƒÂ³s taxa"})
 		return
 	}
 	totalFiat := amountFiat + fee
-	cryptoAmount := payout / rate
 	buyID := database.NewID()
 	customerInput := paymentCustomerInput{
 		Name:      firstNonEmpty(req.Customer.Name, req.CustomerName, req.Name),
