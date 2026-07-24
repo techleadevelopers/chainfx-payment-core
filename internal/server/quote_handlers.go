@@ -140,13 +140,11 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rate := s.buyRate(marketRate)
-	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
-	payout := amountFiat
-	if payout <= 0 {
+	pricing := s.buyQuotePricing(amountFiat, fiatCurrency, rate, marketRate)
+	if pricing.PayoutFiat <= 0 || pricing.CryptoAmount <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apos taxa"})
 		return
 	}
-	totalFiat := amountFiat + fee
 	expiresAt := time.Now().Add(time.Duration(s.cfg.RateLockSec) * time.Second).UTC()
 	quoteID, persisted, err := s.persistPublicQuote(r, publicQuoteInput{
 		Side:          mode,
@@ -155,10 +153,10 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		FiatCurrency:  fiatCurrency,
 		PaymentMethod: paymentMethod,
 		AmountFiat:    amountFiat,
-		CryptoAmount:  payout / rate,
-		Rate:          rate,
+		CryptoAmount:  pricing.CryptoAmount,
+		Rate:          pricing.Rate,
 		MarketRate:    marketRate,
-		FeeFiat:       fee,
+		FeeFiat:       pricing.FeeFiat,
 		ExpiresAt:     expiresAt,
 	})
 	if err != nil {
@@ -172,18 +170,18 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		"mode":              mode,
 		"asset":             asset,
 		"network":           network,
-		"amountFiat":        totalFiat,
+		"amountFiat":        pricing.TotalFiat,
 		"subtotalFiat":      amountFiat,
 		"fiatCurrency":      fiatCurrency,
 		"paymentMethod":     paymentMethod,
-		"feeFiat":           fee,
-		"totalFiat":         totalFiat,
-		"payoutFiat":        payout,
-		"feePolicy":         s.feePolicy(fiatCurrency, rate),
-		"feeBreakdown":      s.buyFeeBreakdown(amountFiat),
-		"rate":              rate,
+		"feeFiat":           pricing.FeeFiat,
+		"totalFiat":         pricing.TotalFiat,
+		"payoutFiat":        pricing.PayoutFiat,
+		"feePolicy":         s.feePolicy(fiatCurrency, pricing.Rate),
+		"feeBreakdown":      pricing.FeeBreakdown,
+		"rate":              pricing.Rate,
 		"marketRate":        roundRate(marketRate),
-		"cryptoAmount":      payout / rate,
+		"cryptoAmount":      pricing.CryptoAmount,
 		"rateLockExpiresAt": expiresAt,
 	})
 }
