@@ -50,6 +50,7 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		BillingAddress map[string]any `json:"billingAddress"`
 		QuoteID        string         `json:"quoteId"`
 		RateLocked     float64        `json:"rateLocked"`
+		FeeBRL         float64        `json:"feeBRL"`
 		Card           struct {
 			PaymentToken   string         `json:"paymentToken"`
 			Brand          string         `json:"brand"`
@@ -122,6 +123,9 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		rate = s.buyRate(marketRate)
 	}
 	fee := s.transactionFee(amountFiat, fiatCurrency, rate)
+	if req.RateLocked > 0 && req.FeeBRL > 0 && s.trustedMobileLoopback(r) {
+		fee = req.FeeBRL
+	}
 	payout := amountFiat
 	if payout <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "valor insuficiente apÃƒÂ³s taxa"})
@@ -240,6 +244,20 @@ func (s *Server) handleCreateBuy(w http.ResponseWriter, r *http.Request) {
 		"statusUrl":          fmt.Sprintf("/api/buy/%s?accessToken=%s", buy.ID, buy.AccessToken),
 		"streamUrl":          fmt.Sprintf("/api/buy/%s/stream?accessToken=%s", buy.ID, buy.AccessToken),
 	})
+}
+
+func (s *Server) trustedMobileLoopback(r *http.Request) bool {
+	if s == nil || s.cfg == nil || r == nil {
+		return false
+	}
+	if strings.TrimSpace(r.Header.Get("X-ChainFX-Internal-Call")) != "mobile-loopback" {
+		return false
+	}
+	key := chainFXAPIKeyFromHeader(r)
+	if key == "" {
+		return false
+	}
+	return csvContains(s.cfg.ChainFXLiveSecretKeys, key) || csvContains(s.cfg.ChainFXTestSecretKeys, key)
 }
 
 func (s *Server) handleGetBuy(w http.ResponseWriter, r *http.Request) {
