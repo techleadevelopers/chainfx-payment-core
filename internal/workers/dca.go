@@ -5,22 +5,31 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
 	"payment-gateway/internal/config"
 	"payment-gateway/internal/database"
+	"payment-gateway/internal/httpclient"
 	"payment-gateway/internal/liquidity"
 )
 
 // DCAWorker executes due Dollar-Cost-Averaging buy strategies.
 // Uses SELECT FOR UPDATE SKIP LOCKED so multiple pod instances never
 // process the same strategy simultaneously.
+//
+// Accounting contract:
+//   - A dca_executions row is created with status='pending' at the start of each cycle.
+//   - total_invested / total_tokens on dca_strategies are ONLY updated when the
+//     downstream buy.sent event is confirmed, preventing phantom balances on failure.
+//   - On any failure the execution row is marked 'failed' and dca.execution.failed is published.
 type DCAWorker struct {
 	bus    *EventBus
 	db     *database.DB
 	cfg    *config.Config
 	dlq    *DeadLetterQueue
+	router *liquidity.Router
 	prices interface {
 		GetPrice(string) float64
 	}
@@ -29,12 +38,24 @@ type DCAWorker struct {
 func NewDCAWorker(bus *EventBus, db *database.DB, cfg *config.Config, prices interface {
 	GetPrice(string) float64
 }) *DCAWorker {
-	return &DCAWorker{bus: bus, db: db, cfg: cfg, dlq: NewPersistentDLQ(db, 500), prices: prices}
+	var client *http.Client = httpclient.Default()
+	return &DCAWorker{
+		bus:    bus,
+		db:     db,
+		cfg:    cfg,
+		dlq:    NewPersistentDLQ(db, 500),
+		router: newBuyLiquidityRouter(cfg, client),
+		prices: prices,
+	}
 }
 
 func (dw *DCAWorker) Start(ctx context.Context) {
 	slog.Info("DCAWorker iniciado — verificando estratégias a cada minuto")
 	dw.dlq.StartPeriodicLog(ctx, 5*time.Minute)
+
+	// Subscribe to buy.sent events to confirm DCA cycle accounting.
+	sentChan := dw.bus.Subscribe("buy.sent")
+	go dw.listenBuySent(ctx, sentChan)
 
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -47,6 +68,92 @@ func (dw *DCAWorker) Start(ctx context.Context) {
 			dw.runDue(ctx)
 		}
 	}
+}
+
+// listenBuySent watches for buy.sent events and confirms any pending DCA execution
+// tied to that buy_order_id, updating total_invested/total_tokens only at this point.
+func (dw *DCAWorker) listenBuySent(ctx context.Context, ch <-chan Event) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			if evt.Type != "buy.sent" || evt.OrderID == "" {
+				continue
+			}
+			go dw.confirmDCAExecution(ctx, evt.OrderID)
+		}
+	}
+}
+
+// confirmDCAExecution is called when buy.sent fires for a buy_order that may belong
+// to a DCA cycle. It marks the execution 'completed' and atomically credits
+// total_invested and total_tokens on the parent strategy.
+func (dw *DCAWorker) confirmDCAExecution(ctx context.Context, buyOrderID string) {
+	var execID, strategyID string
+	var amountBRL, cryptoAmount float64
+
+	err := dw.db.SQL.QueryRowContext(ctx, `
+		SELECT id, strategy_id, amount_brl, COALESCE(crypto_amount, 0)
+		FROM   dca_executions
+		WHERE  buy_order_id = $1::uuid
+		  AND  status = 'pending'
+		LIMIT  1
+	`, buyOrderID).Scan(&execID, &strategyID, &amountBRL, &cryptoAmount)
+	if err == sql.ErrNoRows {
+		return // Not a DCA buy — ignore
+	}
+	if err != nil {
+		slog.Warn("DCAWorker: erro ao buscar execucao DCA para buy.sent",
+			"buy_order_id", buyOrderID, "err", err)
+		return
+	}
+
+	tx, err := dw.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		slog.Warn("DCAWorker: erro ao iniciar tx confirmacao DCA",
+			"exec_id", execID, "err", err)
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE dca_executions SET status='completed', updated_at=NOW() WHERE id=$1`,
+		execID); err != nil {
+		slog.Warn("DCAWorker: erro ao marcar execucao completed",
+			"exec_id", execID, "err", err)
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE dca_strategies
+		SET    total_invested = total_invested + $1,
+		       total_tokens   = total_tokens   + $2,
+		       updated_at     = NOW()
+		WHERE  id = $3
+	`, amountBRL, cryptoAmount, strategyID); err != nil {
+		slog.Warn("DCAWorker: erro ao atualizar stats DCA apos buy.sent",
+			"strategy_id", strategyID, "err", err)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		slog.Error("DCAWorker: erro ao commitar confirmacao DCA",
+			"exec_id", execID, "err", err)
+		return
+	}
+
+	slog.Info("DCAWorker: execucao DCA confirmada e stats atualizados",
+		"exec_id", execID, "strategy_id", strategyID,
+		"amount_brl", amountBRL, "crypto_amount", cryptoAmount)
+	_ = dw.db.AddBuyEvent(ctx, buyOrderID, "dca.execution.confirmed", map[string]any{
+		"strategy_id":   strategyID,
+		"exec_id":       execID,
+		"amount_brl":    amountBRL,
+		"crypto_amount": cryptoAmount,
+	})
 }
 
 type dcaStrategy struct {
@@ -128,7 +235,7 @@ func (dw *DCAWorker) execute(ctx context.Context, s dcaStrategy) {
 		"token", s.TokenSymbol, "network", s.Network, "amount_brl", s.AmountBRL)
 
 	if dw.cfg.AllowSimulations && !dw.cfg.IsProduction() {
-		// Dev simulation: record the investment directly
+		// Dev simulation: record the investment directly without creating a real buy order
 		if _, err := dw.db.SQL.ExecContext(execCtx, `
 			UPDATE dca_strategies
 			SET    total_invested = total_invested + $1
@@ -140,53 +247,75 @@ func (dw *DCAWorker) execute(ctx context.Context, s dcaStrategy) {
 		return
 	}
 
-	destAddress, err := dw.userWalletAddress(execCtx, s.UserID, s.Network)
+	// --- Create a pending execution record before doing anything irreversible ---
+	execID, err := dw.createPendingExecution(execCtx, s)
 	if err != nil {
-		slog.Warn("DCAWorker: erro ao buscar carteira do usuario", "strategy_id", s.ID, "user_id", s.UserID, "err", err)
+		slog.Warn("DCAWorker: erro ao criar execucao pendente", "strategy_id", s.ID, "err", err)
+		// Non-fatal: we still proceed; the accounting safety net is the stats-on-buy.sent logic.
+	}
+
+	fail := func(reason string, origErr error) {
+		slog.Warn("DCAWorker: "+reason, "strategy_id", s.ID, "err", origErr)
+		dw.markExecutionFailed(ctx, execID, s, origErr)
 		dw.dlq.Push(Event{
 			Type:    "dca.buy.requested",
 			OrderID: s.ID,
 			Payload: map[string]any{
-				"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
-				"network": s.Network, "amount_brl": s.AmountBRL, "source": "dca", "strategy_id": s.ID,
-				"error": err.Error(),
+				"user_id": s.UserID, "asset": s.TokenSymbol,
+				"network": s.Network, "amount_brl": s.AmountBRL,
+				"source": "dca", "strategy_id": s.ID,
+				"error": origErr.Error(),
 			},
-		}, 1, err.Error())
+		}, 1, origErr.Error())
+	}
+
+	destAddress, err := dw.userWalletAddress(execCtx, s.UserID, s.Network)
+	if err != nil {
+		fail("erro ao buscar carteira do usuario", err)
 		return
 	}
 	if destAddress == "" {
-		slog.Warn("DCAWorker: usuario sem carteira para DCA", "strategy_id", s.ID, "user_id", s.UserID)
+		noWalletErr := fmt.Errorf("usuario sem carteira configurada para rede %s", s.Network)
+		slog.Warn("DCAWorker: usuario sem carteira para DCA",
+			"strategy_id", s.ID, "user_id", s.UserID)
+		dw.markExecutionFailed(ctx, execID, s, noWalletErr)
 		return
 	}
 	if !dw.dcaPairExecutable(s) {
-		err := fmt.Errorf("par DCA sem rota executavel: %s/%s", s.TokenSymbol, s.Network)
-		slog.Warn("DCAWorker: par sem rota executavel", "strategy_id", s.ID, "asset", s.TokenSymbol, "network", s.Network)
-		dw.dlq.Push(Event{
-			Type:    "dca.buy.requested",
-			OrderID: s.ID,
-			Payload: map[string]any{
-				"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
-				"network": s.Network, "amount_brl": s.AmountBRL, "dest_address": destAddress,
-				"source": "dca", "strategy_id": s.ID, "error": err.Error(),
-			},
-		}, 1, err.Error())
+		pairErr := fmt.Errorf("par DCA sem rota executavel: %s/%s", s.TokenSymbol, s.Network)
+		fail("par sem rota executavel", pairErr)
 		return
 	}
 
-	buy, err := dw.createPaidBuyOrder(execCtx, s, destAddress)
+	// --- Resolve rate: prefer a real quote from the liquidity router ---
+	rate, cryptoAmount, err := dw.resolveRateAndAmount(execCtx, s, destAddress)
 	if err != nil {
-		slog.Warn("DCAWorker: erro ao criar buy order para DCA", "strategy_id", s.ID, "err", err)
-		dw.dlq.Push(Event{
-			Type:    "dca.buy.requested",
-			OrderID: s.ID,
-			Payload: map[string]any{
-				"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
-				"network": s.Network, "amount_brl": s.AmountBRL, "dest_address": destAddress,
-				"source": "dca", "strategy_id": s.ID, "error": err.Error(),
-			},
-		}, 1, err.Error())
+		fail("erro ao obter cotacao para DCA", err)
 		return
 	}
+
+	// Update pending execution with resolved amounts so confirmDCAExecution has accurate data
+	if execID != "" {
+		_, _ = dw.db.SQL.ExecContext(execCtx, `
+			UPDATE dca_executions
+			SET    crypto_amount=$1, rate_brl=$2, updated_at=NOW()
+			WHERE  id=$3
+		`, cryptoAmount, rate, execID)
+	}
+
+	buy, err := dw.createPaidBuyOrder(execCtx, s, destAddress, rate, cryptoAmount)
+	if err != nil {
+		fail("erro ao criar buy order para DCA", err)
+		return
+	}
+
+	// Link the execution row to the buy order so confirmDCAExecution can find it
+	if execID != "" {
+		_, _ = dw.db.SQL.ExecContext(execCtx, `
+			UPDATE dca_executions SET buy_order_id=$1::uuid, updated_at=NOW() WHERE id=$2
+		`, buy.ID, execID)
+	}
+
 	dw.bus.Publish(Event{
 		Type:    "buy.paid",
 		OrderID: buy.ID,
@@ -194,6 +323,120 @@ func (dw *DCAWorker) execute(ctx context.Context, s dcaStrategy) {
 			"user_id": s.UserID, "asset": s.TokenSymbol, "token_symbol": s.TokenSymbol,
 			"network": s.Network, "amount_brl": s.AmountBRL, "dest_address": destAddress,
 			"source": "dca", "strategy_id": s.ID,
+		},
+	})
+}
+
+// resolveRateAndAmount obtains the BRL rate and crypto amount for a DCA cycle.
+// When the liquidity router is enabled it attempts to fetch a real provider quote;
+// on failure (or when router is disabled) it falls back to the price-cache rate
+// with the configured spread.
+func (dw *DCAWorker) resolveRateAndAmount(ctx context.Context, s dcaStrategy, destAddress string) (rate, cryptoAmount float64, err error) {
+	if dw.cfg.LiquidityRouterEnabled && dw.router != nil {
+		pair, ok := resolveLiquidityPair(dw.cfg, s.TokenSymbol, s.Network)
+		if ok {
+			timeout := 2500 * time.Millisecond
+			if ms := dw.cfg.LiquidityQuoteTimeoutMs; ms > 0 {
+				timeout = time.Duration(ms) * time.Millisecond
+			}
+			qCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+
+			// Use a provisional cache-rate amount so providers can compute fees
+			cacheRate := dw.dcaBuyRate(s.TokenSymbol)
+			var provisionalCrypto float64
+			if cacheRate > 0 {
+				provisionalCrypto = s.AmountBRL / cacheRate
+			}
+
+			req := liquidity.Request{
+				OrderID:      "dca-quote-" + s.ID,
+				UserID:       s.UserID,
+				Asset:        pair.Asset,
+				Network:      pair.Network,
+				FiatCurrency: "BRL",
+				AmountBRL:    s.AmountBRL,
+				CryptoAmount: provisionalCrypto,
+				DestAddress:  destAddress,
+				CreatedAt:    time.Now().UTC(),
+			}
+
+			// Collect quotes from all providers and pick the best (most crypto out).
+			allQuotes := dw.router.QuoteAll(qCtx, req)
+			bestCrypto := 0.0
+			bestRate := 0.0
+			for _, q := range allQuotes {
+				if q.CryptoAmount <= 0 || q.FiatCostBRL <= 0 {
+					continue
+				}
+				impliedRate := q.FiatCostBRL / q.CryptoAmount
+				if bestCrypto == 0 || q.CryptoAmount > bestCrypto {
+					bestCrypto = q.CryptoAmount
+					bestRate = impliedRate
+				}
+			}
+			if bestCrypto > 0 && bestRate > 0 {
+				slog.Info("DCAWorker: cotacao real obtida do router",
+					"strategy_id", s.ID, "rate_brl", bestRate, "crypto_amount", bestCrypto)
+				return bestRate, bestCrypto, nil
+			}
+			slog.Info("DCAWorker: nenhuma cotacao do router; usando cache de precos",
+				"strategy_id", s.ID)
+		}
+	}
+
+	// Fallback: price-cache rate with configured spread
+	cacheRate := dw.dcaBuyRate(s.TokenSymbol)
+	if cacheRate <= 0 {
+		return 0, 0, fmt.Errorf("cotacao indisponivel para %s", s.TokenSymbol)
+	}
+	ca := s.AmountBRL / cacheRate
+	if ca <= 0 {
+		return 0, 0, fmt.Errorf("amount DCA invalido apos conversao")
+	}
+	return cacheRate, ca, nil
+}
+
+// createPendingExecution inserts a dca_executions row with status='pending' and
+// returns its UUID. If the insert fails it logs and returns "" (non-fatal).
+func (dw *DCAWorker) createPendingExecution(ctx context.Context, s dcaStrategy) (string, error) {
+	var execID string
+	err := dw.db.SQL.QueryRowContext(ctx, `
+		INSERT INTO dca_executions (strategy_id, amount_brl, status)
+		VALUES ($1::uuid, $2, 'pending')
+		RETURNING id
+	`, s.ID, s.AmountBRL).Scan(&execID)
+	if err != nil {
+		return "", fmt.Errorf("createPendingExecution: %w", err)
+	}
+	return execID, nil
+}
+
+// markExecutionFailed sets a dca_executions row to 'failed' and publishes
+// the dca.execution.failed event. Safe to call with an empty execID.
+func (dw *DCAWorker) markExecutionFailed(ctx context.Context, execID string, s dcaStrategy, origErr error) {
+	errMsg := ""
+	if origErr != nil {
+		errMsg = origErr.Error()
+	}
+	if execID != "" {
+		_, _ = dw.db.SQL.ExecContext(ctx, `
+			UPDATE dca_executions
+			SET    status='failed', error_message=$1, updated_at=NOW()
+			WHERE  id=$2
+		`, errMsg, execID)
+	}
+	dw.bus.Publish(Event{
+		Type:    "dca.execution.failed",
+		OrderID: s.ID,
+		Payload: map[string]any{
+			"strategy_id": s.ID,
+			"exec_id":     execID,
+			"user_id":     s.UserID,
+			"asset":       s.TokenSymbol,
+			"network":     s.Network,
+			"amount_brl":  s.AmountBRL,
+			"error":       errMsg,
 		},
 	})
 }
@@ -212,15 +455,13 @@ func (dw *DCAWorker) dcaPairExecutable(s dcaStrategy) bool {
 	return strings.EqualFold(pair.Asset, "USDT") && strings.EqualFold(pair.Network, "BSC")
 }
 
-func (dw *DCAWorker) createPaidBuyOrder(ctx context.Context, s dcaStrategy, destAddress string) (*database.BuyOrder, error) {
-	rate := dw.dcaBuyRate(s.TokenSymbol)
-	if rate <= 0 {
-		return nil, fmt.Errorf("cotacao indisponivel para %s", s.TokenSymbol)
-	}
-	cryptoAmount := s.AmountBRL / rate
-	if cryptoAmount <= 0 {
-		return nil, fmt.Errorf("amount DCA invalido")
-	}
+// createPaidBuyOrder creates a buy_order with status 'pago_fiat' and payment_method
+// 'dca_internal'. It does NOT update total_invested/total_tokens — that happens
+// only in confirmDCAExecution when buy.sent is received.
+func (dw *DCAWorker) createPaidBuyOrder(ctx context.Context, s dcaStrategy, destAddress string, rate, cryptoAmount float64) (*database.BuyOrder, error) {
+	// Apply the same spread/fee bps as regular buys
+	feeBRL := s.AmountBRL * (float64(dw.cfg.BuyRateSpreadBps) / 10000)
+
 	expiresAt := time.Now().UTC().Add(5 * time.Minute)
 	buy, err := dw.db.CreateBuyOrder(ctx, database.BuyOrderInput{
 		Status:            "pago_fiat",
@@ -230,8 +471,8 @@ func (dw *DCAWorker) createPaidBuyOrder(ctx context.Context, s dcaStrategy, dest
 		PaymentMethod:     "dca_internal",
 		ProviderPaymentID: "dca-" + s.ID + "-" + time.Now().UTC().Format("20060102150405"),
 		RequestID:         "dca-" + s.ID,
-		FeeBRL:            0,
-		PayoutBRL:         s.AmountBRL,
+		FeeBRL:            feeBRL,
+		PayoutBRL:         s.AmountBRL - feeBRL,
 		CryptoAmount:      cryptoAmount,
 		Asset:             strings.ToUpper(strings.TrimSpace(s.TokenSymbol)),
 		Network:           strings.ToUpper(strings.TrimSpace(s.Network)),
@@ -248,17 +489,15 @@ func (dw *DCAWorker) createPaidBuyOrder(ctx context.Context, s dcaStrategy, dest
 	if err != nil {
 		return nil, err
 	}
-	_, _ = dw.db.SQL.ExecContext(ctx, "UPDATE buy_orders SET user_id=$1::uuid WHERE id=$2::uuid", s.UserID, buy.ID)
-	_, _ = dw.db.SQL.ExecContext(ctx, `
-		UPDATE dca_strategies
-		SET total_invested = total_invested + $1,
-		    total_tokens = total_tokens + $2
-		WHERE id = $3`, s.AmountBRL, cryptoAmount, s.ID)
+	_, _ = dw.db.SQL.ExecContext(ctx,
+		"UPDATE buy_orders SET user_id=$1::uuid WHERE id=$2::uuid", s.UserID, buy.ID)
 	_ = dw.db.AddBuyEvent(ctx, buy.ID, "dca.buy.created", map[string]any{
 		"strategy_id": s.ID,
 		"user_id":     s.UserID,
 		"asset":       s.TokenSymbol,
 		"network":     s.Network,
+		"rate_brl":    rate,
+		"fee_brl":     feeBRL,
 	})
 	return buy, nil
 }
