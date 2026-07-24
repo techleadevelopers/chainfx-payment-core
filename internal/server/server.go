@@ -78,13 +78,16 @@ type Server struct {
 type requestIDContextKey struct{}
 
 type buyFeeBreakdown struct {
-	Tier          string  `json:"tier"`
-	ServiceBps    int     `json:"serviceBps"`
-	ServiceFee    float64 `json:"serviceFee"`
-	NetworkFee    float64 `json:"networkFee"`
-	MinFee        float64 `json:"minFee"`
-	TotalFee      float64 `json:"totalFee"`
-	RateSpreadBps int     `json:"rateSpreadBps"`
+	Tier           string  `json:"tier"`
+	ServiceBps     int     `json:"serviceBps"`
+	ServiceFee     float64 `json:"serviceFee"`
+	NetworkFee     float64 `json:"networkFee"`
+	MinFee         float64 `json:"minFee"`
+	TotalFee       float64 `json:"totalFee"`
+	RateSpreadBps  int     `json:"rateSpreadBps"`
+	DisplayFee     float64 `json:"displayFee,omitempty"`
+	EmbeddedSpread float64 `json:"embeddedSpread,omitempty"`
+	TotalMargin    float64 `json:"totalMargin,omitempty"`
 }
 
 func New(cfg *config.Config, db *database.DB, workerMgr *workers.WorkerManager, mailer *email.Service) *Server {
