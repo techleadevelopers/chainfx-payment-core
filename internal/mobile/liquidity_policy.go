@@ -137,7 +137,9 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 	// so it would otherwise be invisible to the frontend for Receive and Send filtering.
 	if s.btcSvc != nil && !seen["BTC:BITCOIN"] {
 		btcMeta, _ := liquidity.NetworkMetadata("BITCOIN")
-		btcSendEnabled := s.mobilePairSendEnabled(liquidity.Pair{Asset: "BTC", Network: "BITCOIN", Decimals: 8})
+		btcPair := liquidity.Pair{Asset: "BTC", Network: "BITCOIN", Decimals: 8}
+		btcSendEnabled := s.mobilePairSendEnabled(btcPair)
+		btcRouterEnabled := s.mobileBuyPairHasExecutionRoute(btcPair)
 		out = append(out, map[string]any{
 			"asset":                    "BTC",
 			"network":                  "BITCOIN",
@@ -147,17 +149,19 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 			"token_standard":           "BTC",
 			"receive_enabled":          true,
 			"send_enabled":             btcMeta.SendEnabled && btcSendEnabled,
-			"buy_enabled":              btcMeta.BuyEnabled,
-			"dca_enabled":              btcMeta.DCAEnabled,
+			"buy_enabled":              btcMeta.BuyEnabled && btcRouterEnabled,
+			"dca_enabled":              btcMeta.DCAEnabled && btcRouterEnabled,
 			"hot_wallet_enabled":       false,
-			"liquidity_router_enabled": false,
+			"liquidity_router_enabled": btcRouterEnabled,
 		})
 	}
 
 	// SOL — always included when the Solana service is configured.
 	if s.solSvc != nil && !seen["SOL:SOLANA"] {
 		solMeta, _ := liquidity.NetworkMetadata("SOLANA")
+		solPair := liquidity.Pair{Asset: "SOL", Network: "SOLANA", Decimals: 9}
 		solSendEnabled := s.cfg.SolanaWithdrawalsEnabled
+		solRouterEnabled := s.mobileBuyPairHasExecutionRoute(solPair)
 		out = append(out, map[string]any{
 			"asset":                    "SOL",
 			"network":                  "SOLANA",
@@ -167,10 +171,10 @@ func (s *Server) mobileLiquiditySupportedPairs() []map[string]any {
 			"token_standard":           "NATIVE",
 			"receive_enabled":          true,
 			"send_enabled":             solMeta.SendEnabled && solSendEnabled,
-			"buy_enabled":              solMeta.BuyEnabled,
-			"dca_enabled":              solMeta.DCAEnabled,
+			"buy_enabled":              solMeta.BuyEnabled && solRouterEnabled,
+			"dca_enabled":              solMeta.DCAEnabled && solRouterEnabled,
 			"hot_wallet_enabled":       false,
-			"liquidity_router_enabled": false,
+			"liquidity_router_enabled": solRouterEnabled,
 		})
 	}
 
@@ -291,11 +295,15 @@ func (s *Server) mobilePairSendEnabled(pair liquidity.Pair) bool {
 		return false
 	}
 	pair = liquidity.EnrichPair(pair)
+	if !liquidity.IsEVMNetwork(pair.Network) {
+		if pair.Asset == "BTC" && pair.Network == "BITCOIN" && s.btcSvc != nil {
+			btcCfg := s.btcSvc.Config()
+			return btcCfg != nil && btcCfg.WithdrawalsEnabled && !btcCfg.EmergencyLockdown
+		}
+		return pair.Asset == "SOL" && pair.Network == "SOLANA" && s.solSvc != nil && s.cfg.SolanaWithdrawalsEnabled
+	}
 	if len(s.mobileTransferRPCURLs(pair.Network)) == 0 {
 		return false
-	}
-	if !liquidity.IsEVMNetwork(pair.Network) {
-		return pair.Asset == "SOL" && pair.Network == "SOLANA" && s.solSvc != nil && s.cfg.SolanaWithdrawalsEnabled
 	}
 	_, _, _, err := s.mobileTransferToken(pair.Asset, pair.Network)
 	return err == nil
