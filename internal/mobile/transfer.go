@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -168,6 +169,12 @@ func (s *Server) handleWalletTransfer(w http.ResponseWriter, r *http.Request) {
 		"pending:"+idempKey, // placeholder until broadcast confirms
 		idempKey,
 	); err != nil {
+		if errors.Is(err, errMobileTransferAlreadyRecorded) {
+			if existing, ok, lookupErr := s.mobileTransferByIdempotency(r.Context(), user.ID, idempKey); lookupErr == nil && ok {
+				writeJSON(w, http.StatusAccepted, existing)
+				return
+			}
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "erro ao registrar transferencia pendente"})
 		return
 	}
